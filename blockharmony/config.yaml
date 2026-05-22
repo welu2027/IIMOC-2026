@@ -1,0 +1,13 @@
+
+type: default
+checker: chk.cc
+
+# Time and memory limits for the contestant's solution
+time: 3s
+memory: 512m
+
+# The subtasks section
+subtasks:
+- score: 100
+  n_cases: 30
+  n_visualize: 10

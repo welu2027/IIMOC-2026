@@ -1,0 +1,220 @@
+# Rectangle Approximation
+
+## Problem
+
+You are given $N$ axis-aligned rectangles with integer coordinates, and a parameter $K$. Output exactly $K$ axis-aligned rectangles (with integer coordinates) that best approximate the union of the original $N$ rectangles.
+
+Let $A$ denote the union of the $N$ input rectangles and $B$ denote the union of your $K$ output rectangles. The score for a test case is:
+
+$$\text{score} = \max\!\left(0,\ 1 - \frac{|A \triangle B|}{|A|}\right)$$
+
+where $|A \triangle B| = |A| + |B| - 2\,|A \cap B|$ is the area of the symmetric difference and $|A|$ is the area of $A$ (measured in unit squares). A higher score is better; a perfect score of $1$ is achieved when $B = A$.
+
+This is an optimization problem: any feasible output is accepted and scored.
+
+---
+
+## Input
+
+```
+N K
+x1_1 y1_1 x2_1 y2_1
+x1_2 y1_2 x2_2 y2_2
+...
+x1_N y1_N x2_N y2_N
+```
+
+* $1 \leq K \leq N \leq 1000$
+* Each rectangle is given as $(x_1,\ y_1,\ x_2,\ y_2)$ with $x_1 < x_2$ and $y_1 < y_2$
+* $-1000 \leq x_1 < x_2 \leq 1000$, $-1000 \leq y_1 < y_2 \leq 1000$, all integers
+* **The $N$ input rectangles may overlap each other.**
+
+---
+
+## Output
+
+Output exactly $K$ lines, each describing one axis-aligned rectangle:
+
+```
+x1_1 y1_1 x2_1 y2_1
+x1_2 y1_2 x2_2 y2_2
+...
+x1_K y1_K x2_K y2_K
+```
+
+Each output rectangle must satisfy:
+
+* $-1000 \leq x_1 < x_2 \leq 1000$, all integers
+* $-1000 \leq y_1 < y_2 \leq 1000$, all integers
+
+The $K$ output rectangles **may overlap each other**.
+
+---
+
+## Examples
+
+### Example 1
+
+**Input** (`smalltest/1.in`)
+
+```
+20 15
+43 1 45 2
+34 2 35 3
+40 2 43 3
+33 3 34 4
+34 2 36 3
+20 14 21 17
+1 33 3 35
+33 3 34 4
+31 3 34 4
+47 35 49 37
+41 41 42 44
+42 39 44 42
+20 29 21 31
+31 3 32 4
+21 18 22 21
+32 2 37 3
+34 3 35 4
+20 15 21 19
+20 17 21 19
+20 11 21 12
+```
+
+**Output** (`smalltest/1.output`)
+
+```
+42 39 44 42
+32 2 37 3
+1 33 3 35
+47 35 49 37
+20 15 21 19
+40 2 43 3
+20 14 21 17
+31 3 34 4
+41 41 42 44
+21 18 22 21
+43 1 45 2
+34 2 36 3
+20 29 21 31
+20 17 21 19
+34 2 35 3
+```
+
+**Score: 0.9524** — With $K=15$ out of $N=20$ input rectangles ($|A|=42$, $|A \triangle B|=2$), the 15 output rectangles miss 2 unit squares from two small input rectangles that were dropped.
+
+![Example 1 visualization](https://contest.iimoc.org/problems/squareapproximation/smalltest/1.png)
+
+---
+
+### Example 2
+
+**Input** (`smalltest/2.in`)
+
+```
+17 9
+17 35 26 36
+22 38 24 41
+25 43 28 44
+24 46 27 47
+24 46 26 47
+26 44 28 45
+7 35 17 36
+25 43 28 45
+26 43 28 44
+7 35 14 36
+27 45 30 46
+22 36 25 37
+21 35 23 36
+3 36 5 37
+26 45 29 46
+21 36 24 37
+26 43 30 44
+```
+
+**Output** (`smalltest/2.output`)
+
+```
+22 38 24 41
+24 46 27 47
+27 43 30 44
+25 43 28 45
+7 35 14 36
+21 35 25 37
+26 45 30 46
+3 36 5 37
+14 35 26 36
+```
+
+**Score: 1.0000** — Despite using only 9 out of 17 rectangles, the 9 output rectangles achieve a perfect score: their union exactly covers $|A|=46$ unit squares with no symmetric difference ($|A \triangle B|=0$).
+
+![Example 2 visualization](https://contest.iimoc.org/problems/squareapproximation/smalltest/2.png)
+
+---
+
+### Example 3
+
+**Input** (`smalltest/3.in`)
+
+```
+3 3
+24 33 25 36
+25 29 26 34
+48 7 49 12
+```
+
+**Output** (`smalltest/3.output`)
+
+```
+25 29 26 34
+48 7 49 12
+24 33 25 36
+```
+
+**Score: 1.0000** — With $K = N = 3$, outputting the same three rectangles (in any order) reproduces $A$ exactly: $|A|=13$, $|A \triangle B|=0$.
+
+![Example 3 visualization](https://contest.iimoc.org/problems/squareapproximation/smalltest/3.png)
+
+---
+
+## Feasibility Requirements
+
+Your output is **feasible** if and only if it contains exactly $K$ valid rectangles as described above. An infeasible output receives a score of **0** on that test.
+
+---
+
+## Scoring
+
+For a feasible output, the per-test score is:
+
+$$\text{score} = \max\!\left(0,\ 1 - \frac{|A| + |B| - 2|A \cap B|}{|A|}\right)$$
+
+where areas are measured in unit squares. The overall judge score is the **average** of per-test scores across all test cases.
+
+---
+
+## Test Generation
+
+There are **30 judge test cases**. Each test is generated using an organic clumping process:
+
+**Rectangle generation** — Rectangles are built one at a time:
+* The first rectangle, and each subsequent rectangle with 30% probability, is placed at a fresh random position and size.
+* Otherwise (70% probability), an existing rectangle is chosen at random and mutated: its center is shifted by Gaussian noise proportional to its own dimensions, and its size is scaled by a log-normal factor, then clamped to the coordinate bounds.
+* All rectangles are shuffled before output so the generation order is not visible.
+
+**Parameter ranges:**
+* $N$ is drawn uniformly from $[1, 1000]$
+* Coordinates are integers in $[-1000, 1000]^2$
+
+**Choosing $K$** — Rather than picking $K$ uniformly, $K$ is tied to the structural complexity of the generated rectangles:
+1. The overlapping-cluster count $C$ is computed: two rectangles are in the same cluster if their interiors intersect (directly or transitively).
+2. $K$ is drawn uniformly from $\bigl[C,\ \min(N,\ C + \max(1, \lfloor N/5 \rfloor))\bigr]$.
+
+This means $K \geq C$, so you always have at least enough rectangles to represent every disjoint cluster, but $K$ is generally much smaller than $N$, requiring non-trivial merging of overlapping rectangles within each cluster.
+
+---
+
+## Constraints
+
+* Time limit: 5 seconds
+* Memory limit: 512 MB
