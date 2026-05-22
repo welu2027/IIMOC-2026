@@ -1,8 +1,10 @@
 import sys
+import time
 from bisect import bisect_left
 from collections import defaultdict
 
 def solve():
+    _t0 = time.monotonic()
     data = sys.stdin.buffer.read().split()
     idx = 0
     n = int(data[idx]); idx += 1
@@ -173,25 +175,27 @@ def solve():
         try_update(obj, chosen)
 
     # --- Phase 3: Swap refinement ---
-    # For each sum in cur_set, try replacing it with a better candidate.
+    # Time-budgeted: only runs if enough time remains (avoids TLE on large cases).
     # Uses prefix/suffix precomputed merges so each trial is O(k), not O(B*k).
-    # Guard: skip if merged list is too large (would be slow in Python).
-    if cur_set and len(cur_merged) < 40000:
+    TIME_BUDGET = 2.4  # seconds; leave margin under the 3s judge limit
+    if cur_set and len(cur_merged) < 40000 and time.monotonic() - _t0 < TIME_BUDGET:
         for _ in range(3):
+            if time.monotonic() - _t0 >= TIME_BUDGET:
+                break
             swapped = False
 
-            # Precompute prefix[i] = merged blocks for cur_set[0..i-1]
             pre = [[]]
             for s in cur_set:
                 pre.append(merge(pre[-1], full_blocks(s)))
 
-            # Precompute suffix[i] = merged blocks for cur_set[i..end]
             suf = [None] * (len(cur_set) + 1)
             suf[len(cur_set)] = []
             for i in range(len(cur_set) - 1, -1, -1):
                 suf[i] = merge(full_blocks(cur_set[i]), suf[i + 1])
 
             for i in range(len(cur_set)):
+                if time.monotonic() - _t0 >= TIME_BUDGET:
+                    break
                 partial = merge(pre[i], suf[i + 1])
 
                 best_swap_gain = 0
@@ -202,7 +206,6 @@ def solve():
                         continue
                     trial = merge(partial, full_blocks(s_new))
                     cnt = count_select(trial)
-                    # Assume C stays same (swap, not add).
                     obj_est = alpha * cnt - beta * cur_C
                     if obj_est - best_obj > best_swap_gain:
                         best_swap_gain = obj_est - best_obj
