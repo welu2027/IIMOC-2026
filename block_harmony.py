@@ -1,288 +1,239 @@
 import sys
-from bisect import bisect_right
+from bisect import bisect_left
+from collections import defaultdict
 
 def solve():
     data = sys.stdin.buffer.read().split()
     idx = 0
-    n = int(data[idx]); idx+=1
-    B = int(data[idx]); idx+=1
-    alpha = int(data[idx]); idx+=1
-    beta = int(data[idx]); idx+=1
-    a = [int(data[idx+i]) for i in range(n)]
-    idx += n
+    n = int(data[idx]); idx += 1
+    B = int(data[idx]); idx += 1
+    alpha = int(data[idx]); idx += 1
+    beta = int(data[idx]); idx += 1
+    a = [int(data[idx + i]) for i in range(n)]
 
-    # prefix sums
-    P = [0]*(n+1)
+    if n == 0:
+        print(0)
+        return
+
+    P = [0] * (n + 1)
     for i in range(n):
-        P[i+1] = P[i] + a[i]
+        P[i + 1] = P[i] + a[i]
 
-    # Step 1: For each candidate sum s, compute the greedy maximum-count
-    # non-overlapping decomposition.
-    # Greedy: scan from left. Maintain pos = current "free" start.
-    # For each l from pos to n, find smallest r >= l with prefix[r]-prefix[l-1] == s.
-    # That's hard for arbitrary s. Easier: scan r, for each r, smallest l>=pos with
-    # prefix[r]-prefix[l-1]=s, i.e. prefix[l-1] = prefix[r]-s.
-    #
-    # Standard approach for fixed s: walk i from 1..n, track positions of prefix values
-    # since `pos-1`. When we see prefix[i] s.t. prefix[i]-s appeared at some j>=pos-1,
-    # we take block (j+1, i), set pos = i+1, reset.
-    #
-    # We want greedy max-count: take the *earliest* end. So for each r, check if there
-    # exists l-1 in [pos-1, r-1] with prefix[l-1] = prefix[r]-s. If yes, pick the
-    # smallest such l-1 (or any — any choice yields a valid block, and taking it now
-    # is optimal greedy).
-    #
-    # Implementation: for fixed s, iterate r=1..n. Maintain a set of prefix values seen
-    # at indices >= pos-1. When prefix[r]-s is in that set, take block ending at r:
-    # find some l-1 with that prefix value; we can use the most recent occurrence
-    # for shortest block (doesn't matter for count). After taking, set pos=r+1 and
-    # clear the set, then continue.
-    #
-    # To enumerate sums: candidate sums are differences prefix[r]-prefix[l]. We focus
-    # on small block sums first (more blocks). Specifically, single elements give us
-    # sums equal to a[i]; pairs/triples give other sums. We'll consider sums that
-    # appear "many" times.
+    _fb_cache = {}
+    def full_blocks(s):
+        """All (l,r) with sum s. Sorted (r ASC, l DESC) — prefer shorter blocks."""
+        if s in _fb_cache:
+            return _fb_cache[s]
+        out = []
+        for L in range(1, n + 1):
+            target = P[L - 1] + s
+            r = bisect_left(P, target, L, n + 1)
+            if r <= n and P[r] == target:
+                out.append((r, L))
+        out.sort(key=lambda x: (x[0], -x[1]))
+        _fb_cache[s] = out
+        return out
 
-    # Build a frequency table of single-element values to seed candidates,
-    # plus enumerate small-window sums.
-    from collections import defaultdict
-
-    # For each sum s, compute greedy block list.
-    def greedy_blocks_for_sum(s):
-        # returns list of (l, r) 1-indexed
-        blocks = []
-        pos_prefix_idx = 0  # we accept prefix indices >= pos_prefix_idx
-        # map prefix_value -> list of indices (>= pos_prefix_idx)
-        seen = {P[pos_prefix_idx]: pos_prefix_idx}
-        r = 1
-        while r <= n:
+    def greedy_count(s):
+        """Max non-overlapping blocks for sum s. O(n)."""
+        cnt = 0
+        seen = {P[0]: 0}
+        for r in range(1, n + 1):
             need = P[r] - s
             if need in seen:
-                # take block from (seen[need]+1, r)
-                lminus1 = seen[need]
-                blocks.append((lminus1+1, r))
-                # reset
-                pos_prefix_idx = r
-                seen = {P[r]: r}
-                r += 1
+                cnt += 1; seen = {P[r]: r}
             else:
                 if P[r] not in seen:
                     seen[P[r]] = r
-                r += 1
-        return blocks
+        return cnt
 
-    # Generate candidate sums:
-    # - all values 0..max possible up to some cap
-    # - sums of windows of length 1, 2, 3 (small windows produce small sums and many occurrences)
-    candidate_sums = set()
-    # single-element values
+    def merge(A, Bl):
+        """Merge two sorted (r asc, l desc) block lists. O(|A|+|Bl|)."""
+        res = []; i = j = 0; la, lb = len(A), len(Bl)
+        while i < la and j < lb:
+            ra, la_ = A[i]; rb, lb_ = Bl[j]
+            if ra < rb or (ra == rb and la_ >= lb_):
+                res.append(A[i]); i += 1
+            else:
+                res.append(Bl[j]); j += 1
+        if i < la: res.extend(A[i:])
+        if j < lb: res.extend(Bl[j:])
+        return res
+
+    def count_select(blocks):
+        cnt = last = 0
+        for r, l in blocks:
+            if l > last:
+                cnt += 1; last = r
+        return cnt
+
+    def evaluate(sum_list):
+        """Activity select with color tracking. Returns (obj, [(l,r,s)])."""
+        tagged = []
+        for s in sum_list:
+            for r, l in full_blocks(s):
+                tagged.append((r, l, s))
+        tagged.sort(key=lambda x: (x[0], -x[1]))
+        chosen = []; used = set(); last = 0
+        for r, l, s in tagged:
+            if l > last:
+                chosen.append((l, r, s)); used.add(s); last = r
+        C = len(used)
+        return (alpha * len(chosen) - beta * C if C else 0), chosen
+
+    freq = [0] * 51
     for v in a:
-        candidate_sums.add(v)
-    # 2-windows, 3-windows for variety
-    for w in (2, 3, 4, 5):
-        if w <= n:
-            for i in range(n - w + 1):
-                s = P[i+w] - P[i]
-                candidate_sums.add(s)
-                if len(candidate_sums) > 5000:
-                    break
-            if len(candidate_sums) > 5000:
-                break
-    # sum 0 is interesting if there are zeros
-    if 0 in a:
-        candidate_sums.add(0)
-
-    # If too many, keep small ones (more occurrences likely)
-    if len(candidate_sums) > 2000:
-        candidate_sums = set(sorted(candidate_sums)[:2000])
-
-    # For each candidate sum, run greedy and store block list.
-    sum_blocks = {}
-    for s in candidate_sums:
-        bl = greedy_blocks_for_sum(s)
-        if len(bl) >= 1:
-            sum_blocks[s] = bl
-
-    # Score a sum alone: if we picked only this color, we'd get alpha*|bl| - beta.
-    # We want sums where alpha*|bl| - beta > 0 (otherwise not worth using a color).
-    # Sort sums by descending |bl|.
-    sorted_sums = sorted(sum_blocks.items(), key=lambda x: -len(x[1]))
-
-    # Try selecting top-K sums (K from 1..B) and run weighted interval scheduling
-    # to pick a globally non-overlapping subset, then evaluate objective.
-
-    # Weighted interval scheduling for max number of blocks given a candidate
-    # block list (each block has weight 1 for the count maximization).
-    # We'll do a more nuanced DP that also limits distinct colors used.
-    #
-    # Simpler: pick a fixed set S of sums (size <= B). Among union of their block
-    # lists, find max-cardinality non-overlapping selection. That's classic: sort
-    # by r, greedy-pick earliest r that doesn't conflict.
-    #
-    # But with multiple block options per sum, we need union of all candidate
-    # blocks across sums in S, then standard activity-selection (max # of pairwise
-    # non-overlapping intervals) — this is solved greedily by sorting on r.
-
-    def max_nonoverlap(blocks_with_sum):
-        # blocks_with_sum: list of (l, r, s)
-        # returns chosen list (l,r,s) maximizing count
-        if not blocks_with_sum:
-            return []
-        sorted_b = sorted(blocks_with_sum, key=lambda x: (x[1], x[0]))
-        chosen = []
-        last_r = 0
-        for l, r, s in sorted_b:
-            if l > last_r:
-                chosen.append((l, r, s))
-                last_r = r
-        return chosen
-
-    # Generate candidate block pool per sum. The greedy_blocks_for_sum already
-    # gives a max greedy set, but those blocks are tuned to *that* sum alone.
-    # For combining, we may want a richer pool: all maximal blocks summing to s
-    # but starting at various positions. Building all such intervals is up to
-    # O(n) per sum (since for each l, there's at most one minimal r reaching sum s
-    # when a[i]>=0 monotone... but with zeros it's more). For simplicity,
-    # for each sum we'll generate ALL (l,r) with that sum and small width via
-    # two-pointer (since a[i]>=0, prefix sums non-decreasing, so for each l there
-    # is a unique r-range producing each sum).
-
-    def all_blocks_for_sum(s):
-        # since a[i]>=0, prefix is non-decreasing.
-        # For each l (1..n), find r such that prefix[r]-prefix[l-1] = s.
-        # Since prefix is non-decreasing, we can binary search.
-        out = []
-        for L in range(1, n+1):
-            target = P[L-1] + s
-            # find any r in [L, n] with P[r] == target
-            # use bisect on P[L..n]
-            lo = L
-            hi = n
-            # binary search for leftmost r >= L with P[r] >= target
-            left = lo
-            right = hi+1
-            while left < right:
-                mid = (left+right)//2
-                if P[mid] >= target:
-                    right = mid
-                else:
-                    left = mid+1
-            r = left
-            if r <= n and P[r] == target:
-                out.append((L, r))
-                # also include subsequent r's with P[r]==target (zeros after)
-                rr = r+1
-                while rr <= n and P[rr] == target:
-                    out.append((L, rr))
-                    rr += 1
-        return out
-
-    # We'll build pool per chosen sum lazily.
+        freq[v] += 1
 
     best_obj = 0
-    best_output = []  # list of (l,r,c)
+    best_sol = []
 
-    # Try strategies:
-    # Strategy A: For each top sum individually (one color), compute count and obj.
-    # Strategy B: Combine top sums up to B in greedy fashion.
+    def try_update(obj, chosen):
+        nonlocal best_obj, best_sol
+        if obj > best_obj:
+            best_obj = obj; best_sol = list(chosen)
 
-    # First gather sums that individually give positive contribution: alpha*cnt - beta > 0
-    # i.e. cnt > beta/alpha
-    threshold = (beta // alpha) + 1 if alpha > 0 else 1
-    # actually need cnt*alpha > beta -> cnt > beta/alpha. For positive obj per color.
-    if beta == 0:
-        threshold = 1
+    # --- Candidate generation ---
+    # All single-element values present in array.
+    cands = set(v for v in range(51) if freq[v] > 0)
 
-    viable = [(s, bl) for s, bl in sorted_sums if len(bl) >= threshold]
-    # keep at most some number for combinatorial search
-    viable_top = viable[:max(B*5, 30)]
+    # Multi-element sums from windows of size 2..20.
+    mfreq = defaultdict(int)
+    for start in range(n):
+        s = 0
+        for k in range(min(20, n - start)):
+            s += a[start + k]
+            if k >= 1:
+                mfreq[s] += 1
 
-    # Strategy: pick subset of sums of size <=B from viable_top to maximize total
-    # non-overlap count - we'll greedily build.
-    #
-    # Greedy add: start empty. Repeatedly try adding the sum that best increases
-    # objective. Stop when no improvement.
+    thr = max(2, n // 100)
+    for s, c in mfreq.items():
+        if c >= thr:
+            cands.add(s)
 
-    # Build per-sum block list (full pool) for viable sums. To save memory, only
-    # for top candidates.
-    pool_per_sum = {}
-    top_for_combine = sorted_sums[:max(B*8, 40)]
-    for s, _ in top_for_combine:
-        pool_per_sum[s] = all_blocks_for_sum(s)
+    # Rank by greedy count; keep top candidates.
+    gcnt = {s: greedy_count(s) for s in cands}
+    sorted_cands = sorted(cands, key=lambda s: -gcnt[s])[:max(70, B * 6)]
 
-    def evaluate_set(sum_set):
-        # union all candidate blocks, find max non-overlap count.
-        # IMPORTANT: a chosen block must "use" exactly one color. After picking
-        # max non-overlap, we need each color present at least once to count
-        # toward C. We can drop a color entirely (don't use it) if it ended up
-        # contributing 0 blocks — but max_nonoverlap may pick blocks from any sum
-        # in the set, so 'colors used' = number of distinct sums actually chosen.
-        all_b = []
-        for s in sum_set:
-            for (l,r) in pool_per_sum.get(s, []):
-                all_b.append((l, r, s))
-        chosen = max_nonoverlap(all_b)
-        used_sums = set(s for _,_,s in chosen)
-        k = len(chosen)
-        C = len(used_sums)
-        obj = alpha*k - beta*C
-        return obj, chosen
+    # Precompute block lists for all candidates.
+    for s in sorted_cands:
+        full_blocks(s)
 
-    # Greedy build from empty
-    current_set = set()
+    # --- Phase 1: Quick single-element optimal (exact, no activity select needed) ---
+    # OBJ = alpha*sum(freq[v]) - beta*C is exact since single-element blocks never overlap.
+    se_vals = sorted([v for v in range(51) if freq[v] > 0], key=lambda v: -freq[v])
+    se_set = []
+    for v in se_vals:
+        if len(se_set) >= B:
+            break
+        if alpha * freq[v] > beta or not se_set:
+            se_set.append(v)
+        else:
+            break
+    if not se_set and se_vals:
+        se_set = [se_vals[0]]
+
+    # Evaluate all prefix lengths with full blocks (captures multi-element bonus).
+    fm0 = []
+    for i, v in enumerate(se_set):
+        fm0 = merge(fm0, full_blocks(v))
+        obj, chosen = evaluate(se_set[:i + 1])
+        try_update(obj, chosen)
+
+    # --- Phase 2: Greedy forward pass over all candidates ---
+    # Uses incremental merge (O(k) per trial), calls evaluate() once per iteration.
+    cur_set = []
+    cur_merged = []
     cur_obj = 0
-    cur_chosen = []
+    cur_C = 0
 
-    # First: try each single sum
-    candidate_pool = [s for s,_ in top_for_combine]
+    for _ in range(B):
+        best_gain = 0
+        bs = None; bm = None
 
-    improved = True
-    while improved and len(current_set) < B:
-        improved = False
-        best_add = None
-        best_new_obj = cur_obj
-        best_new_chosen = cur_chosen
-        for s in candidate_pool:
-            if s in current_set:
+        for s in sorted_cands:
+            if s in cur_set:
                 continue
-            trial = current_set | {s}
-            obj, ch = evaluate_set(trial)
-            if obj > best_new_obj:
-                best_new_obj = obj
-                best_add = s
-                best_new_chosen = ch
-        if best_add is not None:
-            current_set.add(best_add)
-            cur_obj = best_new_obj
-            cur_chosen = best_new_chosen
-            improved = True
+            trial = merge(cur_merged, full_blocks(s))
+            cnt = count_select(trial)
+            obj_est = alpha * cnt - beta * (cur_C + 1)
+            gain = obj_est - cur_obj
+            if gain > best_gain:
+                best_gain = gain; bs = s; bm = trial
 
-    # Also try removal pass: maybe removing some sum increases obj (if a color's
-    # blocks all got displaced anyway). After max_nonoverlap, unused sums in set
-    # don't actually appear; but we already only count distinct sums in chosen.
-    # So C is naturally min. Good.
+        if bs is None:
+            break
 
-    if cur_obj > best_obj:
-        best_obj = cur_obj
-        # assign colors: map each distinct sum to a color id 1..B
-        sums_used = sorted(set(s for _,_,s in cur_chosen))
-        s2c = {s: i+1 for i, s in enumerate(sums_used)}
-        best_output = [(l, r, s2c[s]) for (l, r, s) in cur_chosen]
+        cur_set.append(bs)
+        cur_merged = bm
 
-    # Also try: just the single best sum
-    if sorted_sums:
-        for s, bl in sorted_sums[:5]:
-            k = len(bl)
-            obj = alpha*k - beta*1
-            if obj > best_obj:
-                best_obj = obj
-                best_output = [(l, r, 1) for (l, r) in bl]
+        obj, chosen = evaluate(cur_set)
+        cur_obj = obj
+        cur_C = len(set(s for _, _, s in chosen)) if chosen else 0
+        try_update(obj, chosen)
 
-    # Output
-    out_lines = []
-    out_lines.append(str(len(best_output)))
-    for (l, r, c) in best_output:
-        out_lines.append(f"{l} {r} {c}")
-    sys.stdout.write("\n".join(out_lines) + ("\n" if out_lines else ""))
+    # --- Phase 3: Swap refinement ---
+    # For each sum in cur_set, try replacing it with a better candidate.
+    # Uses prefix/suffix precomputed merges so each trial is O(k), not O(B*k).
+    # Guard: skip if merged list is too large (would be slow in Python).
+    if cur_set and len(cur_merged) < 40000:
+        for _ in range(3):
+            swapped = False
+
+            # Precompute prefix[i] = merged blocks for cur_set[0..i-1]
+            pre = [[]]
+            for s in cur_set:
+                pre.append(merge(pre[-1], full_blocks(s)))
+
+            # Precompute suffix[i] = merged blocks for cur_set[i..end]
+            suf = [None] * (len(cur_set) + 1)
+            suf[len(cur_set)] = []
+            for i in range(len(cur_set) - 1, -1, -1):
+                suf[i] = merge(full_blocks(cur_set[i]), suf[i + 1])
+
+            for i in range(len(cur_set)):
+                partial = merge(pre[i], suf[i + 1])
+
+                best_swap_gain = 0
+                best_swap_s = None
+
+                for s_new in sorted_cands:
+                    if s_new in cur_set:
+                        continue
+                    trial = merge(partial, full_blocks(s_new))
+                    cnt = count_select(trial)
+                    # Assume C stays same (swap, not add).
+                    obj_est = alpha * cnt - beta * cur_C
+                    if obj_est - best_obj > best_swap_gain:
+                        best_swap_gain = obj_est - best_obj
+                        best_swap_s = s_new
+                        best_swap_m = trial
+
+                if best_swap_s is not None:
+                    new_set = cur_set[:i] + [best_swap_s] + cur_set[i + 1:]
+                    obj_ex, chosen = evaluate(new_set)
+                    if obj_ex > best_obj:
+                        try_update(obj_ex, chosen)
+                        cur_set = new_set
+                        cur_merged = best_swap_m
+                        cur_C = len(set(s for _, _, s in chosen)) if chosen else 0
+                        cur_obj = obj_ex
+                        swapped = True
+                        break
+
+            if not swapped:
+                break
+
+    # --- Output ---
+    if best_obj <= 0 or not best_sol:
+        print(0)
+        return
+
+    used_sums = sorted(set(s for _, _, s in best_sol))
+    s2c = {s: i + 1 for i, s in enumerate(used_sums)}
+    out = [str(len(best_sol))]
+    for l, r, s in best_sol:
+        out.append(f"{l} {r} {s2c[s]}")
+    sys.stdout.write('\n'.join(out) + '\n')
 
 solve()
