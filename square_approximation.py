@@ -65,20 +65,197 @@ def find_clusters(rects):
     return list(groups.values())
 
 
+def max_sum_subrect(val, nx, ny):
+    """2D Kadane: maximum-sum subrectangle of grid val (nx x ny).
+
+    For every pair of x-rows (i1..i2) we accumulate column sums and run 1D
+    Kadane over y. O(nx^2 * ny). Returns (best_sum, (i1, i2, j1, j2)) with
+    i2/j2 exclusive, or (0, None) if no positive-sum rectangle exists.
+    """
+    best = 0
+    res = None
+    for i1 in range(nx):
+        col = [0] * ny
+        for i2 in range(i1, nx):
+            rv = val[i2]
+            cur = 0
+            start = 0
+            for j in range(ny):
+                col[j] += rv[j]
+                c = col[j]
+                if cur <= 0:
+                    cur = c
+                    start = j
+                else:
+                    cur += c
+                if cur > best:
+                    best = cur
+                    res = (i1, i2 + 1, start, j + 1)
+    return best, res
+
+
+def largest_rect_in_A(avail, nx, ny, cell_dx, cell_dy):
+    """Largest-area axis-aligned rectangle whose cells are ALL available (in A
+    and not yet covered). Zero-excess by construction.
+
+    Sweeps x-rows maintaining, per y-column, the accumulated x-width of the
+    consecutive available run; each row solves a variable-width largest-
+    rectangle-in-histogram (bar height = run width in x, bar width = cell_dy).
+    O(nx * ny). Returns (best_area, (i1, i2, j1, j2)) or (0, None).
+    """
+    best = 0
+    res = None
+    w = [0.0] * ny
+    startx = [0] * ny
+    ywidth_at = [0.0] * (ny + 1)
+    for j in range(ny):
+        ywidth_at[j + 1] = ywidth_at[j] + cell_dy[j]
+    for i in range(nx):
+        ai = avail[i]
+        dx = cell_dx[i]
+        for j in range(ny):
+            if ai[j]:
+                if w[j] == 0.0:
+                    startx[j] = i
+                w[j] += dx
+            else:
+                w[j] = 0.0
+        st = []  # (height_w, ystart_index, xstart_row)
+        for j in range(ny):
+            h = w[j]
+            if not st or h > st[-1][0]:
+                st.append((h, j, startx[j]))
+            elif h < st[-1][0]:
+                jstart = j
+                xs_row = startx[j]
+                while st and st[-1][0] > h:
+                    ph, pj, pxr = st.pop()
+                    area = ph * (ywidth_at[j] - ywidth_at[pj])
+                    if area > best:
+                        best = area
+                        res = (pxr, i + 1, pj, j)
+                    jstart = pj
+                    xs_row = pxr
+                st.append((h, jstart, xs_row))
+        for ph, pj, pxr in reversed(st):
+            area = ph * (ywidth_at[ny] - ywidth_at[pj])
+            if area > best:
+                best = area
+                res = (pxr, i + 1, pj, ny)
+    return best, res
+
+
+def refine_cluster(cluster_rects, out_rects, deadline):
+    """Local search: repeatedly remove the output rect with the least exclusive
+    in-A coverage and re-place the largest rectangle that now fits in the
+    uncovered region. A swap is kept only when the new rect covers strictly
+    more new in-A area than the removed rect exclusively held — i.e. freeing a
+    redundant rect let a bigger rectangle form elsewhere. Zero excess preserved.
+    """
+    b = len(out_rects)
+    if b == 0:
+        return out_rects
+
+    xs_set = set(); ys_set = set()
+    for r in list(cluster_rects) + list(out_rects):
+        xs_set.add(r[0]); xs_set.add(r[2])
+        ys_set.add(r[1]); ys_set.add(r[3])
+    xs = sorted(xs_set); ys = sorted(ys_set)
+    nx = len(xs) - 1; ny = len(ys) - 1
+    if nx <= 0 or ny <= 0:
+        return out_rects
+    xi = {v: i for i, v in enumerate(xs)}
+    yi = {v: i for i, v in enumerate(ys)}
+    cdx = [xs[i + 1] - xs[i] for i in range(nx)]
+    cdy = [ys[j + 1] - ys[j] for j in range(ny)]
+
+    inA = [[False] * ny for _ in range(nx)]
+    for r in cluster_rects:
+        for i in range(xi[r[0]], xi[r[2]]):
+            ra = inA[i]
+            for j in range(yi[r[1]], yi[r[3]]):
+                ra[j] = True
+
+    coverage = [[0] * ny for _ in range(nx)]
+    bounds = []
+    for r in out_rects:
+        bd = (xi[r[0]], xi[r[2]], yi[r[1]], yi[r[3]])
+        bounds.append(bd)
+        for i in range(bd[0], bd[1]):
+            cr = coverage[i]
+            for j in range(bd[2], bd[3]):
+                cr[j] += 1
+    avail = [[inA[i][j] and coverage[i][j] == 0 for j in range(ny)]
+             for i in range(nx)]
+    cur = list(out_rects)
+
+    def excl(bd):
+        i1, i2, j1, j2 = bd; s = 0
+        for i in range(i1, i2):
+            cr = coverage[i]; ra = inA[i]; dx = cdx[i]
+            for j in range(j1, j2):
+                if ra[j] and cr[j] == 1:
+                    s += dx * cdy[j]
+        return s
+
+    excls = [excl(bd) for bd in bounds]
+
+    improved = True
+    while improved and time.monotonic() < deadline:
+        improved = False
+        order = sorted(range(len(cur)), key=lambda i: excls[i])
+        for idx in order:
+            if time.monotonic() >= deadline:
+                break
+            i1, i2, j1, j2 = bounds[idx]
+            E = excls[idx]
+            for i in range(i1, i2):
+                cr = coverage[i]; ra = inA[i]; av = avail[i]
+                for j in range(j1, j2):
+                    cr[j] -= 1
+                    if cr[j] == 0 and ra[j]:
+                        av[j] = True
+            G, res = largest_rect_in_A(avail, nx, ny, cdx, cdy)
+            if res is not None and G > E + 1e-9:
+                ni1, ni2, nj1, nj2 = res
+                for i in range(ni1, ni2):
+                    cr = coverage[i]; av = avail[i]
+                    for j in range(nj1, nj2):
+                        cr[j] += 1; av[j] = False
+                bounds[idx] = res
+                cur[idx] = (xs[ni1], ys[nj1], xs[ni2], ys[nj2])
+                excls = [excl(bd) for bd in bounds]
+                improved = True
+            else:
+                for i in range(i1, i2):
+                    cr = coverage[i]; av = avail[i]
+                    for j in range(j1, j2):
+                        cr[j] += 1; av[j] = False
+    return cur
+
+
+# build_up's per-step primitive. Zero-excess maximal rectangles
+# (largest_rect_in_A) empirically beat max-gain Kadane on the judge
+# distribution: greedy beneficial-excess does not pay off globally, so we
+# default to histogram everywhere. Kadane is still used when all_combos is
+# forced (tiny global-feasible inputs).
+KADANE_THRESH = 0
+
+
 def build_up(input_rects, k, all_combos=False):
     """
-    Greedy build-up: iteratively add the best candidate rect.
+    Greedy build-up: at each step add the rectangle that most reduces |A△B|.
 
-    gain(R) = area(R ∩ Union NOT yet covered) − area(R NOT in Union NOT yet covered).
+    gain(R) = area(R ∩ A-not-yet-covered) − area(R ∩ not-A-not-yet-covered).
 
-    Candidate rects depend on grid size:
-      - all_combos=True or total_combos <= AUTO_THRESH:
-          enumerate ALL (i1,i2,j1,j2) using 2D prefix sums (O(1) query).
-      - else: restricted candidate set with direct queries.
+    The best such rectangle is the maximum-sum subrectangle of a signed grid
+    (+cell area inside A, −cell area outside A). For grids where that is
+    affordable we use 2D Kadane (max_sum_subrect), which lets a rect take on
+    beneficial excess. For very large grids we fall back to the largest fully-
+    inside-A rectangle (largest_rect_in_A): zero excess, O(nx*ny) per step.
 
     Returns (output_rects, marginal_gains), both length k.
     """
-    AUTO_THRESH = 600000
     n = len(input_rects)
     if k == 0:
         return [], []
@@ -99,108 +276,55 @@ def build_up(input_rects, k, all_combos=False):
     cell_dx = [xs[i + 1] - xs[i] for i in range(nx)]
     cell_dy = [ys[j + 1] - ys[j] for j in range(ny)]
 
-    # --- Build union grid and val grid ---
-    union = [[False] * ny for _ in range(nx)]
+    # --- in-A grid ---
+    inA = [[False] * ny for _ in range(nx)]
     for r in input_rects:
         i1, i2, j1, j2 = xi[r[0]], xi[r[2]], yi[r[1]], yi[r[3]]
         for i in range(i1, i2):
-            row = union[i]
+            row = inA[i]
             for j in range(j1, j2):
                 row[j] = True
 
-    val = [[0] * ny for _ in range(nx)]
-    for i in range(nx):
-        dx = cell_dx[i]
-        row_u = union[i]; row_v = val[i]
-        for j in range(ny):
-            a = dx * cell_dy[j]
-            row_v[j] = a if row_u[j] else -a
-
-    # --- Candidate generation ---
-    n_xp = nx * (nx + 1) // 2
-    n_yp = ny * (ny + 1) // 2
-    total = n_xp * n_yp
-
-    use_all_combos = all_combos or total <= AUTO_THRESH
-
-    if use_all_combos:
-        cands = [(i1, i2, j1, j2)
-                 for i1 in range(nx) for i2 in range(i1 + 1, nx + 1)
-                 for j1 in range(ny) for j2 in range(j1 + 1, ny + 1)]
-    else:
-        cand_set = set()
-        for r in input_rects:
-            cand_set.add((xi[r[0]], xi[r[2]], yi[r[1]], yi[r[3]]))
-        # All pairs for small-medium clusters, sliding window for large
-        if n <= 150:
-            cr = input_rects
-            for i in range(n):
-                ri = cr[i]
-                for j in range(i + 1, n):
-                    rj = cr[j]
-                    cand_set.add((
-                        min(xi[ri[0]], xi[rj[0]]), max(xi[ri[2]], xi[rj[2]]),
-                        min(yi[ri[1]], yi[rj[1]]), max(yi[ri[3]], yi[rj[3]])
-                    ))
-        else:
-            W = 30
-            order = sorted(range(n), key=lambda idx: input_rects[idx][0] + input_rects[idx][2])
-            cr = input_rects
-            for oi in range(n):
-                ri = cr[order[oi]]
-                for oj in range(oi + 1, min(n, oi + 1 + W)):
-                    rj = cr[order[oj]]
-                    cand_set.add((
-                        min(xi[ri[0]], xi[rj[0]]), max(xi[ri[2]], xi[rj[2]]),
-                        min(yi[ri[1]], yi[rj[1]]), max(yi[ri[3]], yi[rj[3]])
-                    ))
-            # Also do y-sorted window for better vertical merges
-            order_y = sorted(range(n), key=lambda idx: input_rects[idx][1] + input_rects[idx][3])
-            for oi in range(n):
-                ri = cr[order_y[oi]]
-                for oj in range(oi + 1, min(n, oi + 1 + W)):
-                    rj = cr[order_y[oj]]
-                    cand_set.add((
-                        min(xi[ri[0]], xi[rj[0]]), max(xi[ri[2]], xi[rj[2]]),
-                        min(yi[ri[1]], yi[rj[1]]), max(yi[ri[3]], yi[rj[3]])
-                    ))
-        cands = list(cand_set)
-
-    # --- Build-up loop (always uses prefix sums for O(1) per-candidate queries) ---
     output_rects = []
     gains = []
+    use_kadane = all_combos or (nx * nx * ny <= KADANE_THRESH)
 
-    for _ in range(k):
-        if time.monotonic() - _T0 > TIME_LIMIT:
-            break
-
-        best_g = 0
-        best_c = None
-
-        # Rebuild 2D prefix sum
-        psum = [[0] * (ny + 1) for _ in range(nx + 1)]
-        for i in range(1, nx + 1):
-            rp = psum[i]; rpm = psum[i - 1]
-            rv = val[i - 1]
-            for j in range(1, ny + 1):
-                rp[j] = rv[j - 1] + rpm[j] + rp[j - 1] - rpm[j - 1]
-
-        for (i1, i2, j1, j2) in cands:
-            g = psum[i2][j2] - psum[i1][j2] - psum[i2][j1] + psum[i1][j1]
-            if g > best_g:
-                best_g = g; best_c = (i1, i2, j1, j2)
-
-        if best_c is None:
-            break
-
-        gains.append(best_g)
-        i1, i2, j1, j2 = best_c
-        output_rects.append((xs[i1], ys[j1], xs[i2], ys[j2]))
-
-        for i in range(i1, i2):
-            rv = val[i]
-            for j in range(j1, j2):
-                rv[j] = 0
+    if use_kadane:
+        # Signed value grid; covered cells set to 0 (no further gain or loss).
+        val = [[0] * ny for _ in range(nx)]
+        for i in range(nx):
+            dx = cell_dx[i]; ra = inA[i]; rv = val[i]
+            for j in range(ny):
+                a = dx * cell_dy[j]
+                rv[j] = a if ra[j] else -a
+        for _ in range(k):
+            if time.monotonic() - _T0 > TIME_LIMIT:
+                break
+            best, res = max_sum_subrect(val, nx, ny)
+            if res is None or best <= 0:
+                break
+            i1, i2, j1, j2 = res
+            gains.append(best)
+            output_rects.append((xs[i1], ys[j1], xs[i2], ys[j2]))
+            for i in range(i1, i2):
+                rv = val[i]
+                for j in range(j1, j2):
+                    rv[j] = 0
+    else:
+        avail = [row[:] for row in inA]  # in A and not yet covered
+        for _ in range(k):
+            if time.monotonic() - _T0 > TIME_LIMIT:
+                break
+            best, res = largest_rect_in_A(avail, nx, ny, cell_dx, cell_dy)
+            if res is None or best <= 0:
+                break
+            i1, i2, j1, j2 = res
+            gains.append(best)
+            output_rects.append((xs[i1], ys[j1], xs[i2], ys[j2]))
+            for i in range(i1, i2):
+                ra = avail[i]
+                for j in range(j1, j2):
+                    ra[j] = False
 
     while len(output_rects) < k:
         output_rects.append(output_rects[0] if output_rects else input_rects[0])
@@ -593,7 +717,16 @@ def main():
             heapq.heappush(heap, (-gs[nxt], i, nxt))
 
     out = []
-    for i, (cr, b) in enumerate(zip(cluster_rects_list, budgets)):
+    # Process biggest-budget clusters first: they hold most of the uncovered
+    # area and benefit most from the time-bounded refinement pass. The remaining
+    # time budget is shared fairly across clusters in proportion to their budget.
+    order = sorted(range(C), key=lambda i: budgets[i], reverse=True)
+    remaining_b = sum(budgets[i] for i in order)
+    for i in order:
+        cr = cluster_rects_list[i]
+        b = budgets[i]
+        if b <= 0:
+            continue
         # Build-up result
         bu_out = list(all_rects_seq[i][:b])
         while len(bu_out) < b:
@@ -608,9 +741,16 @@ def main():
             if score_against_target(dd_out, cr) < score_against_target(bu_out, cr):
                 cluster_out = dd_out
 
-        if time.monotonic() - _T0 < TIME_LIMIT - 0.2:
+        # Time-bounded local-search refinement (relocate redundant rects).
+        time_left = (_T0 + TIME_LIMIT - 0.15) - time.monotonic()
+        if b >= 2 and time_left > 0.02 and remaining_b > 0:
+            slice_dl = time.monotonic() + time_left * (b / remaining_b)
+            cluster_out = refine_cluster(cr, cluster_out, slice_dl)
+
+        if time.monotonic() - _T0 < TIME_LIMIT - 0.1:
             cluster_out = shrink_output(cluster_out, cr)
 
+        remaining_b -= b
         out.extend(cluster_out)
 
     while len(out) < K:
