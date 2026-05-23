@@ -1,16 +1,21 @@
 #!/usr/bin/env python3
 """
-Rectangle Approximation — greedy build-up with full coordinate enumeration.
+Rectangle Approximation — zero-excess greedy partition + edge sliding.
 
 Strategy:
-- For small N (total coord combos <= threshold): global build-up over all rects.
-  Enumerates ALL (x1,x2,y1,y2) from input coordinates using 2D prefix sums.
-  This finds cross-cluster merges (key for quality on small inputs).
-- For larger N: per-cluster build-up with restricted candidate sets.
-  Uses input rects + nearby-pair bboxes; input rects only for huge clusters.
-- Budget allocated via greedy marginal gain (greedy knapsack).
-- Post-process: shrink each output rect inward when it helps.
-- Global time budget prevents TLE.
+- Split the input into overlapping clusters (disjoint interiors); solve each
+  independently, then concatenate.
+- Per cluster, build_up greedily places the largest rectangle that lies fully
+  inside A and is not yet covered (largest_rect_in_A, histogram method, zero
+  excess). On small grids it can instead use the true max-gain rectangle via
+  2D Kadane, but zero-excess greedy wins on the judge distribution.
+- Budget K is allocated across clusters from scratch by marginal gain (each
+  rect's gain == reduction in |A△B|), so the globally largest next rects win.
+- Post-process every cluster with optimize_edges: slide each output rect's four
+  edges outward (swallow adjacent uncovered area) or inward (trim excess),
+  accepting only score-improving moves. This and a relocation pass
+  (refine_cluster) alternate as time-bounded coordinate descent.
+- Defensive grid-size caps keep pathological dense clusters within the limit.
 """
 import sys
 import random
