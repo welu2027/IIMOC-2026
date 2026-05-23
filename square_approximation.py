@@ -571,16 +571,18 @@ def main():
             all_rects_seq.append(r_out)
             all_gains_seq.append(g_out)
 
-    # Allocate K budget by marginal gain: each added rect's gain == reduction in
-    # |A△B|, so popping the highest marginal gain greedily minimises symmetric
-    # difference. (Requires real gains from build_up — see the greedy loop.)
-    budgets = [1] * C
+    # Allocate all K budget by marginal gain, FROM SCRATCH (every cluster starts
+    # at 0). Each added rect's gain == reduction in |A△B|, so popping the highest
+    # marginal gain greedily minimises symmetric difference. Allocating from 0
+    # (rather than forcing 1 per cluster) lets a big cluster's 2nd/3rd rect beat a
+    # tiny cluster's 1st rect — critical when K≈C and big clusters are starved.
+    budgets = [0] * C
     heap = []
     for i in range(C):
         gs = all_gains_seq[i]
-        if len(gs) > 1 and gs[1] > 0 and sizes[i] > 1:
-            heapq.heappush(heap, (-gs[1], i, 1))
-    for _ in range(K - C):
+        if len(gs) > 0 and gs[0] > 0:
+            heapq.heappush(heap, (-gs[0], i, 0))
+    for _ in range(K):
         if not heap:
             break
         _, i, pos = heapq.heappop(heap)
@@ -589,17 +591,6 @@ def main():
         gs = all_gains_seq[i]
         if nxt < len(gs) and gs[nxt] > 0 and budgets[i] < sizes[i]:
             heapq.heappush(heap, (-gs[nxt], i, nxt))
-
-    # If heap exhausted (all remaining gains ≤ 0), distribute remainder by size
-    remaining = K - sum(budgets)
-    if remaining > 0:
-        order = sorted(range(C), key=lambda i: -sizes[i])
-        idx = 0; safety = 0
-        while remaining > 0 and safety < 10 * C + 50:
-            i = order[idx % C]
-            if budgets[i] < sizes[i]:
-                budgets[i] += 1; remaining -= 1
-            idx += 1; safety += 1
 
     out = []
     for i, (cr, b) in enumerate(zip(cluster_rects_list, budgets)):
