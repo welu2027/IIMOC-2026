@@ -166,6 +166,8 @@ def refine_cluster(cluster_rects, out_rects, deadline):
         return out_rects
     xi = {v: i for i, v in enumerate(xs)}
     yi = {v: i for i, v in enumerate(ys)}
+    if nx * ny > CELL_CAP or _grid_work(cluster_rects, xi, yi) > WORK_CAP:
+        return out_rects
     cdx = [xs[i + 1] - xs[i] for i in range(nx)]
     cdy = [ys[j + 1] - ys[j] for j in range(ny)]
 
@@ -242,6 +244,36 @@ def refine_cluster(cluster_rects, out_rects, deadline):
 KADANE_THRESH = 0
 
 
+# Defensive caps. The per-cell passes (grid construction, histogram, edge
+# sliding) cost O(nx*ny) and O(sum of compressed rect areas). Clusters this
+# large do not arise in the judge distribution (gen.py shrinks rectangles as N
+# grows), but a pathological dense cluster could blow the time limit, so any
+# cluster above these caps falls back to a cheap rect selection.
+CELL_CAP = 250000
+WORK_CAP = 4000000
+
+
+def _grid_work(rects, xi, yi):
+    """Total compressed-grid cell writes needed to rasterise rects (O(len))."""
+    w = 0
+    for r in rects:
+        w += (xi[r[2]] - xi[r[0]]) * (yi[r[3]] - yi[r[1]])
+        if w > WORK_CAP:
+            break
+    return w
+
+
+def _largest_rects_fallback(input_rects, k):
+    """Fast, grid-free fallback: the k largest-area input rectangles."""
+    ordered = sorted(input_rects, key=lambda r: (r[2] - r[0]) * (r[3] - r[1]),
+                     reverse=True)
+    out = ordered[:k]
+    gains = [(r[2] - r[0]) * (r[3] - r[1]) for r in out]
+    while len(out) < k:
+        out.append(input_rects[0]); gains.append(0)
+    return list(out), gains
+
+
 def build_up(input_rects, k, all_combos=False):
     """
     Greedy build-up: at each step add the rectangle that most reduces |A△B|.
@@ -273,6 +305,10 @@ def build_up(input_rects, k, all_combos=False):
 
     xi = {v: i for i, v in enumerate(xs)}
     yi = {v: i for i, v in enumerate(ys)}
+
+    if nx * ny > CELL_CAP or _grid_work(input_rects, xi, yi) > WORK_CAP:
+        return _largest_rects_fallback(input_rects, k)
+
     cell_dx = [xs[i + 1] - xs[i] for i in range(nx)]
     cell_dy = [ys[j + 1] - ys[j] for j in range(ny)]
 
@@ -360,6 +396,8 @@ def optimize_edges(output_rects, ref_rects):
 
     xi = {v: i for i, v in enumerate(xs)}
     yi = {v: i for i, v in enumerate(ys)}
+    if nx * ny > CELL_CAP or _grid_work(ref_rects, xi, yi) > WORK_CAP:
+        return list(output_rects)
     cell_dx = [xs[i + 1] - xs[i] for i in range(nx)]
     cell_dy = [ys[j + 1] - ys[j] for j in range(ny)]
 
@@ -537,6 +575,8 @@ def drop_down_cluster(cluster_rects, k):
 
     xi = {v: i for i, v in enumerate(xs)}
     yi = {v: i for i, v in enumerate(ys)}
+    if nx * ny > CELL_CAP or _grid_work(cluster_rects, xi, yi) > WORK_CAP:
+        return _largest_rects_fallback(cluster_rects, k)[0]
     cell_dx = [xs[i + 1] - xs[i] for i in range(nx)]
     cell_dy = [ys[j + 1] - ys[j] for j in range(ny)]
 
@@ -686,10 +726,15 @@ def score_against_target(out_rects, ref_rects):
     nx = len(xs) - 1; ny = len(ys) - 1
     if nx <= 0 or ny <= 0:
         return 0
-    A = [[False] * ny for _ in range(nx)]
-    B = [[False] * ny for _ in range(nx)]
     xi = {v: i for i, v in enumerate(xs)}
     yi = {v: i for i, v in enumerate(ys)}
+    if (nx * ny > CELL_CAP or _grid_work(ref_rects, xi, yi) > WORK_CAP
+            or _grid_work(out_rects, xi, yi) > WORK_CAP):
+        # Too large to rasterise safely; report +inf so callers never prefer
+        # this branch over an already-computed cheap result.
+        return float('inf')
+    A = [[False] * ny for _ in range(nx)]
+    B = [[False] * ny for _ in range(nx)]
     for r in ref_rects:
         i1, i2, j1, j2 = xi[r[0]], xi[r[2]], yi[r[1]], yi[r[3]]
         for i in range(i1, i2):
