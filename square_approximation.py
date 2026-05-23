@@ -15,6 +15,7 @@ Strategy:
 import sys
 import random
 import time
+import heapq
 
 _T0 = time.monotonic()
 TIME_LIMIT = 4.2
@@ -81,12 +82,6 @@ def build_up(input_rects, k, all_combos=False):
     n = len(input_rects)
     if k == 0:
         return [], []
-    if k >= n:
-        out = list(input_rects)
-        while len(out) < k:
-            out.append(input_rects[0])
-        gains = [1] * n + [0] * (k - n)
-        return out[:k], gains[:k]
 
     # --- Coordinate compression ---
     xs_set = set(); ys_set = set()
@@ -516,6 +511,14 @@ def score_against_target(out_rects, ref_rects):
 def main():
     _N, K, rects = read_input()
 
+    # K >= N: output every input rect (exact reproduction of A, perfect score).
+    if K >= _N:
+        out = list(rects)
+        while len(out) < K:
+            out.append(rects[0])
+        sys.stdout.write('\n'.join(f"{r[0]} {r[1]} {r[2]} {r[3]}" for r in out[:K]) + '\n')
+        return
+
     # Check if global approach (all coordinate combinations) is feasible
     xs_g = set(); ys_g = set()
     for r in rects:
@@ -568,31 +571,26 @@ def main():
             all_rects_seq.append(r_out)
             all_gains_seq.append(g_out)
 
-    # Allocate K budget proportional to cluster size
+    # Allocate K budget by marginal gain: each added rect's gain == reduction in
+    # |A△B|, so popping the highest marginal gain greedily minimises symmetric
+    # difference. (Requires real gains from build_up — see the greedy loop.)
     budgets = [1] * C
-    extra = K - C
-    if extra > 0:
-        total_n = sum(sizes)
-        give = [0] * C
-        if total_n > 0:
-            for i in range(C):
-                g = (extra * sizes[i]) // total_n
-                g = min(g, sizes[i] - 1)
-                give[i] = g
-        used = sum(give)
-        remaining_extra = extra - used
-        order = sorted(range(C), key=lambda i: -sizes[i])
-        idx = 0; safety = 0
-        while remaining_extra > 0 and safety < 20 * C + 50:
-            i = order[idx % C]
-            if budgets[i] + give[i] < sizes[i]:
-                give[i] += 1; remaining_extra -= 1
-            idx += 1; safety += 1
-            if all(budgets[t] + give[t] >= sizes[t] for t in range(C)):
-                break
-        for i in range(C):
-            budgets[i] += give[i]
+    heap = []
+    for i in range(C):
+        gs = all_gains_seq[i]
+        if len(gs) > 1 and gs[1] > 0 and sizes[i] > 1:
+            heapq.heappush(heap, (-gs[1], i, 1))
+    for _ in range(K - C):
+        if not heap:
+            break
+        _, i, pos = heapq.heappop(heap)
+        budgets[i] += 1
+        nxt = pos + 1
+        gs = all_gains_seq[i]
+        if nxt < len(gs) and gs[nxt] > 0 and budgets[i] < sizes[i]:
+            heapq.heappush(heap, (-gs[nxt], i, nxt))
 
+    # If heap exhausted (all remaining gains ≤ 0), distribute remainder by size
     remaining = K - sum(budgets)
     if remaining > 0:
         order = sorted(range(C), key=lambda i: -sizes[i])
