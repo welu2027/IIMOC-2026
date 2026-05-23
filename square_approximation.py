@@ -333,8 +333,19 @@ def build_up(input_rects, k, all_combos=False):
     return output_rects, gains
 
 
-def shrink_output(output_rects, ref_rects):
-    """Shrink each output rect inward when removing an edge strip reduces symdiff."""
+def optimize_edges(output_rects, ref_rects):
+    """Slide each output rect's four edges to their best positions.
+
+    An edge may move outward (grow, swallowing adjacent uncovered in-A cells at
+    the cost of any excess crossed) or inward (shrink, trimming excess). For one
+    edge the others are held fixed and the position minimising |A△B| is chosen;
+    only strictly improving moves are applied, so this can never lower the score.
+
+    Per-cell rules (signed = +area if in A else −area; coverage = #rects over it):
+      adding an uncovered cell (coverage 0) changes symdiff by −signed;
+      removing an exclusive cell (coverage 1) changes symdiff by +signed;
+      cells covered by another rect contribute 0 either way.
+    """
     if not output_rects or not ref_rects:
         return list(output_rects)
 
@@ -371,7 +382,6 @@ def shrink_output(output_rects, ref_rects):
     coverage = [[0] * ny for _ in range(nx)]
     out_bounds = []
     current = list(output_rects)
-
     for r in current:
         i1 = xi.get(r[0]); i2 = xi.get(r[2])
         j1 = yi.get(r[1]); j2 = yi.get(r[3])
@@ -383,57 +393,125 @@ def shrink_output(output_rects, ref_rects):
             for j in range(j1, j2):
                 row[j] += 1
 
-    def shrink_delta(i1, i2, j1, j2):
+    def add_delta_x(i, j1, j2):      # add column-strip i over rows [j1,j2)
+        cr = coverage[i]; sr = signed[i]; s = 0
+        for j in range(j1, j2):
+            if cr[j] == 0:
+                s -= sr[j]
+        return s
+
+    def rem_delta_x(i, j1, j2):      # remove column-strip i over rows [j1,j2)
+        cr = coverage[i]; sr = signed[i]; s = 0
+        for j in range(j1, j2):
+            if cr[j] == 1:
+                s += sr[j]
+        return s
+
+    def add_delta_y(j, i1, i2):      # add row-strip j over cols [i1,i2)
         s = 0
         for i in range(i1, i2):
-            cr_ = coverage[i]; sr = signed[i]
-            for j in range(j1, j2):
-                if cr_[j] == 1:
-                    s += sr[j]
+            if coverage[i][j] == 0:
+                s -= signed[i][j]
         return s
+
+    def rem_delta_y(j, i1, i2):
+        s = 0
+        for i in range(i1, i2):
+            if coverage[i][j] == 1:
+                s += signed[i][j]
+        return s
+
+    def toggle(i1, i2, j1, j2, delta):  # delta=+1 add, -1 remove
+        for i in range(i1, i2):
+            row = coverage[i]
+            for j in range(j1, j2):
+                row[j] += delta
 
     improved = True
     iters = 0
-    while improved and iters < 4:
+    while improved and iters < 6:
         improved = False; iters += 1
+        if time.monotonic() - _T0 > TIME_LIMIT:
+            break
         for idx in range(len(current)):
             if out_bounds[idx] is None or time.monotonic() - _T0 > TIME_LIMIT:
                 continue
             i1, i2, j1, j2 = out_bounds[idx]
-            r = current[idx]
-            best_new = None; best_delta = 0
-            for t in range(1, i2 - i1):
-                d = shrink_delta(i1, i1 + t, j1, j2)
-                if d < best_delta:
-                    best_delta = d; best_new = (xs[i1 + t], r[1], r[2], r[3])
-            for t in range(1, i2 - i1):
-                d = shrink_delta(i2 - t, i2, j1, j2)
-                if d < best_delta:
-                    best_delta = d; best_new = (r[0], r[1], xs[i2 - t], r[3])
-            for t in range(1, j2 - j1):
-                d = shrink_delta(i1, i2, j1, j1 + t)
-                if d < best_delta:
-                    best_delta = d; best_new = (r[0], ys[j1 + t], r[2], r[3])
-            for t in range(1, j2 - j1):
-                d = shrink_delta(i1, i2, j2 - t, j2)
-                if d < best_delta:
-                    best_delta = d; best_new = (r[0], r[1], r[2], ys[j2 - t])
-            if best_new is not None:
-                for i in range(i1, i2):
-                    row = coverage[i]
-                    for j in range(j1, j2):
-                        row[j] -= 1
-                ni1 = xi.get(best_new[0], i1)
-                ni2 = xi.get(best_new[2], i2)
-                nj1 = yi.get(best_new[1], j1)
-                nj2 = yi.get(best_new[3], j2)
-                out_bounds[idx] = (ni1, ni2, nj1, nj2)
-                for i in range(ni1, ni2):
-                    row = coverage[i]
-                    for j in range(nj1, nj2):
-                        row[j] += 1
-                current[idx] = best_new
-                improved = True
+
+            # LEFT edge: best new left position p (grow p<i1, shrink p>i1).
+            best_d = 0; best_p = i1; acc = 0
+            for p in range(i1 - 1, -1, -1):       # grow left
+                acc += add_delta_x(p, j1, j2)
+                if acc < best_d:
+                    best_d = acc; best_p = p
+            acc = 0
+            for p in range(i1 + 1, i2):           # shrink left
+                acc += rem_delta_x(p - 1, j1, j2)
+                if acc < best_d:
+                    best_d = acc; best_p = p
+            if best_p < i1:
+                toggle(best_p, i1, j1, j2, 1)
+            elif best_p > i1:
+                toggle(i1, best_p, j1, j2, -1)
+            if best_p != i1:
+                i1 = best_p; improved = True
+
+            # RIGHT edge: best new right position q (grow q>i2, shrink q<i2).
+            best_d = 0; best_q = i2; acc = 0
+            for q in range(i2 + 1, nx + 1):       # grow right
+                acc += add_delta_x(q - 1, j1, j2)
+                if acc < best_d:
+                    best_d = acc; best_q = q
+            acc = 0
+            for q in range(i2 - 1, i1, -1):       # shrink right
+                acc += rem_delta_x(q, j1, j2)
+                if acc < best_d:
+                    best_d = acc; best_q = q
+            if best_q > i2:
+                toggle(i2, best_q, j1, j2, 1)
+            elif best_q < i2:
+                toggle(best_q, i2, j1, j2, -1)
+            if best_q != i2:
+                i2 = best_q; improved = True
+
+            # TOP edge (j1).
+            best_d = 0; best_p = j1; acc = 0
+            for p in range(j1 - 1, -1, -1):       # grow down
+                acc += add_delta_y(p, i1, i2)
+                if acc < best_d:
+                    best_d = acc; best_p = p
+            acc = 0
+            for p in range(j1 + 1, j2):           # shrink
+                acc += rem_delta_y(p - 1, i1, i2)
+                if acc < best_d:
+                    best_d = acc; best_p = p
+            if best_p < j1:
+                toggle(i1, i2, best_p, j1, 1)
+            elif best_p > j1:
+                toggle(i1, i2, j1, best_p, -1)
+            if best_p != j1:
+                j1 = best_p; improved = True
+
+            # BOTTOM edge (j2).
+            best_d = 0; best_q = j2; acc = 0
+            for q in range(j2 + 1, ny + 1):       # grow up
+                acc += add_delta_y(q - 1, i1, i2)
+                if acc < best_d:
+                    best_d = acc; best_q = q
+            acc = 0
+            for q in range(j2 - 1, j1, -1):       # shrink
+                acc += rem_delta_y(q, i1, i2)
+                if acc < best_d:
+                    best_d = acc; best_q = q
+            if best_q > j2:
+                toggle(i1, i2, j2, best_q, 1)
+            elif best_q < j2:
+                toggle(i1, i2, best_q, j2, -1)
+            if best_q != j2:
+                j2 = best_q; improved = True
+
+            out_bounds[idx] = (i1, i2, j1, j2)
+            current[idx] = (xs[i1], ys[j1], xs[i2], ys[j2])
 
     return current
 
@@ -656,7 +734,7 @@ def main():
     if global_feasible:
         # Global build-up: enumerate all coord combos across the entire input
         bu_out, _ = build_up(rects, K, all_combos=True)
-        bu_out = shrink_output(bu_out, rects)
+        bu_out = optimize_edges(bu_out, rects)
         while len(bu_out) < K:
             bu_out.append(bu_out[0] if bu_out else rects[0])
         out_rects = bu_out
@@ -667,7 +745,7 @@ def main():
             while len(dd_out) < K:
                 dd_out.append(dd_out[0] if dd_out else rects[0])
             if time.monotonic() - _T0 < TIME_LIMIT - 0.2:
-                dd_out = shrink_output(dd_out, rects)
+                dd_out = optimize_edges(dd_out, rects)
             if score_against_target(dd_out, rects) < score_against_target(out_rects, rects):
                 out_rects = dd_out
 
@@ -741,14 +819,28 @@ def main():
             if score_against_target(dd_out, cr) < score_against_target(bu_out, cr):
                 cluster_out = dd_out
 
-        # Time-bounded local-search refinement (relocate redundant rects).
+        # Time-bounded coordinate descent: alternate edge sliding (grow gaps /
+        # trim excess) with relocation of redundant rects. Each step is monotone
+        # in score, so iterating until a fixed point or the time slice runs out
+        # only helps.
         time_left = (_T0 + TIME_LIMIT - 0.15) - time.monotonic()
         if b >= 2 and time_left > 0.02 and remaining_b > 0:
             slice_dl = time.monotonic() + time_left * (b / remaining_b)
-            cluster_out = refine_cluster(cr, cluster_out, slice_dl)
-
-        if time.monotonic() - _T0 < TIME_LIMIT - 0.1:
-            cluster_out = shrink_output(cluster_out, cr)
+            prev_sc = None
+            for _round in range(6):
+                cluster_out = optimize_edges(cluster_out, cr)
+                if time.monotonic() >= slice_dl:
+                    break
+                cluster_out = refine_cluster(cr, cluster_out, slice_dl)
+                sc = score_against_target(cluster_out, cr)
+                if prev_sc is not None and sc >= prev_sc:
+                    cluster_out = optimize_edges(cluster_out, cr)
+                    break
+                prev_sc = sc
+                if time.monotonic() >= slice_dl:
+                    break
+        elif time.monotonic() - _T0 < TIME_LIMIT - 0.1:
+            cluster_out = optimize_edges(cluster_out, cr)
 
         remaining_b -= b
         out.extend(cluster_out)
