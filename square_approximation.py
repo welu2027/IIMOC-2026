@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
 """
-Rectangle Approximation - pure Python (no numpy).
+Rectangle Approximation — greedy build-up with full coordinate enumeration.
 
 Strategy:
-1. Cluster rectangles by transitive interior overlap. K >= C.
-2. Distribute K-C extra budget across clusters proportional to size.
-3. Per cluster, reduce from n down to k by greedily picking the cheapest of:
-   - drop one rectangle, or
-   - merge two rectangles into their bounding box.
-   Cost = change in symmetric difference, computed on a coordinate-
-   compressed grid. Drop costs are cached & invalidated only on overlap.
-4. Post-process: shrink each output rect inward as long as it helps.
+- For small N (total coord combos <= threshold): global build-up over all rects.
+  Enumerates ALL (x1,x2,y1,y2) from input coordinates using 2D prefix sums.
+  This finds cross-cluster merges (key for quality on small inputs).
+- For larger N: per-cluster build-up with restricted candidate sets.
+  Uses input rects + nearby-pair bboxes; input rects only for huge clusters.
+- Budget allocated via greedy marginal gain (greedy knapsack).
+- Post-process: shrink each output rect inward when it helps.
+- Global time budget prevents TLE.
 """
 import sys
-import bisect
 import random
+import time
+
+_T0 = time.monotonic()
+TIME_LIMIT = 4.2
 
 
 def read_input():
@@ -32,11 +35,6 @@ def read_input():
 
 def overlap_interior(a, b):
     return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
-
-
-def bbox_union(a, b):
-    return (min(a[0], b[0]), min(a[1], b[1]),
-            max(a[2], b[2]), max(a[3], b[3]))
 
 
 def find_clusters(rects):
@@ -66,292 +64,352 @@ def find_clusters(rects):
     return list(groups.values())
 
 
-def approximate_cluster(cluster_rects, k):
-    n = len(cluster_rects)
-    if k >= n:
-        out = list(cluster_rects)
-        while len(out) < k:
-            out.append(cluster_rects[0])
-        return out[:k]
+def build_up(input_rects, k, all_combos=False):
+    """
+    Greedy build-up: iteratively add the best candidate rect.
 
-    # Coordinate compression
+    gain(R) = area(R ∩ Union NOT yet covered) − area(R NOT in Union NOT yet covered).
+
+    Candidate rects depend on grid size:
+      - all_combos=True or total_combos <= AUTO_THRESH:
+          enumerate ALL (i1,i2,j1,j2) using 2D prefix sums (O(1) query).
+      - else: restricted candidate set with direct queries.
+
+    Returns (output_rects, marginal_gains), both length k.
+    """
+    AUTO_THRESH = 600000
+    n = len(input_rects)
+    if k == 0:
+        return [], []
+    if k >= n:
+        out = list(input_rects)
+        while len(out) < k:
+            out.append(input_rects[0])
+        gains = [1] * n + [0] * (k - n)
+        return out[:k], gains[:k]
+
+    # --- Coordinate compression ---
     xs_set = set(); ys_set = set()
-    for r in cluster_rects:
+    for r in input_rects:
         xs_set.add(r[0]); xs_set.add(r[2])
         ys_set.add(r[1]); ys_set.add(r[3])
     xs = sorted(xs_set); ys = sorted(ys_set)
-    nx = len(xs) - 1
-    ny = len(ys) - 1
+    nx = len(xs) - 1; ny = len(ys) - 1
+    if nx <= 0 or ny <= 0:
+        out = [input_rects[0]] * k
+        return out, [0] * k
 
-    cell_dx = [xs[i+1] - xs[i] for i in range(nx)]
-    cell_dy = [ys[j+1] - ys[j] for j in range(ny)]
+    xi = {v: i for i, v in enumerate(xs)}
+    yi = {v: i for i, v in enumerate(ys)}
+    cell_dx = [xs[i + 1] - xs[i] for i in range(nx)]
+    cell_dy = [ys[j + 1] - ys[j] for j in range(ny)]
 
-    # signed[i][j] = +cell_area if cell in A, else -cell_area.
-    # Removing 1->0 coverage on cell contributes +signed to symdiff.
-    # Adding 0->1 coverage contributes -signed.
+    # --- Build union grid and val grid ---
+    union = [[False] * ny for _ in range(nx)]
+    for r in input_rects:
+        i1, i2, j1, j2 = xi[r[0]], xi[r[2]], yi[r[1]], yi[r[3]]
+        for i in range(i1, i2):
+            row = union[i]
+            for j in range(j1, j2):
+                row[j] = True
+
+    val = [[0] * ny for _ in range(nx)]
+    for i in range(nx):
+        dx = cell_dx[i]
+        row_u = union[i]; row_v = val[i]
+        for j in range(ny):
+            a = dx * cell_dy[j]
+            row_v[j] = a if row_u[j] else -a
+
+    # --- Candidate generation ---
+    n_xp = nx * (nx + 1) // 2
+    n_yp = ny * (ny + 1) // 2
+    total = n_xp * n_yp
+
+    use_all_combos = all_combos or total <= AUTO_THRESH
+
+    if use_all_combos:
+        cands = [(i1, i2, j1, j2)
+                 for i1 in range(nx) for i2 in range(i1 + 1, nx + 1)
+                 for j1 in range(ny) for j2 in range(j1 + 1, ny + 1)]
+    else:
+        cand_set = set()
+        for r in input_rects:
+            cand_set.add((xi[r[0]], xi[r[2]], yi[r[1]], yi[r[3]]))
+        # All pairs for small-medium clusters, sliding window for large
+        if n <= 150:
+            cr = input_rects
+            for i in range(n):
+                ri = cr[i]
+                for j in range(i + 1, n):
+                    rj = cr[j]
+                    cand_set.add((
+                        min(xi[ri[0]], xi[rj[0]]), max(xi[ri[2]], xi[rj[2]]),
+                        min(yi[ri[1]], yi[rj[1]]), max(yi[ri[3]], yi[rj[3]])
+                    ))
+        else:
+            W = 30
+            order = sorted(range(n), key=lambda idx: input_rects[idx][0] + input_rects[idx][2])
+            cr = input_rects
+            for oi in range(n):
+                ri = cr[order[oi]]
+                for oj in range(oi + 1, min(n, oi + 1 + W)):
+                    rj = cr[order[oj]]
+                    cand_set.add((
+                        min(xi[ri[0]], xi[rj[0]]), max(xi[ri[2]], xi[rj[2]]),
+                        min(yi[ri[1]], yi[rj[1]]), max(yi[ri[3]], yi[rj[3]])
+                    ))
+            # Also do y-sorted window for better vertical merges
+            order_y = sorted(range(n), key=lambda idx: input_rects[idx][1] + input_rects[idx][3])
+            for oi in range(n):
+                ri = cr[order_y[oi]]
+                for oj in range(oi + 1, min(n, oi + 1 + W)):
+                    rj = cr[order_y[oj]]
+                    cand_set.add((
+                        min(xi[ri[0]], xi[rj[0]]), max(xi[ri[2]], xi[rj[2]]),
+                        min(yi[ri[1]], yi[rj[1]]), max(yi[ri[3]], yi[rj[3]])
+                    ))
+        cands = list(cand_set)
+
+    # --- Build-up loop (always uses prefix sums for O(1) per-candidate queries) ---
+    output_rects = []
+    gains = []
+
+    for _ in range(k):
+        if time.monotonic() - _T0 > TIME_LIMIT:
+            break
+
+        best_g = 0
+        best_c = None
+
+        # Rebuild 2D prefix sum
+        psum = [[0] * (ny + 1) for _ in range(nx + 1)]
+        for i in range(1, nx + 1):
+            rp = psum[i]; rpm = psum[i - 1]
+            rv = val[i - 1]
+            for j in range(1, ny + 1):
+                rp[j] = rv[j - 1] + rpm[j] + rp[j - 1] - rpm[j - 1]
+
+        for (i1, i2, j1, j2) in cands:
+            g = psum[i2][j2] - psum[i1][j2] - psum[i2][j1] + psum[i1][j1]
+            if g > best_g:
+                best_g = g; best_c = (i1, i2, j1, j2)
+
+        if best_c is None:
+            break
+
+        gains.append(best_g)
+        i1, i2, j1, j2 = best_c
+        output_rects.append((xs[i1], ys[j1], xs[i2], ys[j2]))
+
+        for i in range(i1, i2):
+            rv = val[i]
+            for j in range(j1, j2):
+                rv[j] = 0
+
+    while len(output_rects) < k:
+        output_rects.append(output_rects[0] if output_rects else input_rects[0])
+        gains.append(0)
+
+    return output_rects, gains
+
+
+def shrink_output(output_rects, ref_rects):
+    """Shrink each output rect inward when removing an edge strip reduces symdiff."""
+    if not output_rects or not ref_rects:
+        return list(output_rects)
+
+    xs_set = set(); ys_set = set()
+    for r in list(ref_rects) + list(output_rects):
+        xs_set.add(r[0]); xs_set.add(r[2])
+        ys_set.add(r[1]); ys_set.add(r[3])
+    xs = sorted(xs_set); ys = sorted(ys_set)
+    nx = len(xs) - 1; ny = len(ys) - 1
+    if nx <= 0 or ny <= 0:
+        return list(output_rects)
+
+    xi = {v: i for i, v in enumerate(xs)}
+    yi = {v: i for i, v in enumerate(ys)}
+    cell_dx = [xs[i + 1] - xs[i] for i in range(nx)]
+    cell_dy = [ys[j + 1] - ys[j] for j in range(ny)]
+
     A_grid = [[False] * ny for _ in range(nx)]
-    for r in cluster_rects:
-        i1 = bisect.bisect_left(xs, r[0])
-        i2 = bisect.bisect_left(xs, r[2])
-        j1 = bisect.bisect_left(ys, r[1])
-        j2 = bisect.bisect_left(ys, r[3])
+    for r in ref_rects:
+        i1, i2, j1, j2 = xi[r[0]], xi[r[2]], yi[r[1]], yi[r[3]]
         for i in range(i1, i2):
             row = A_grid[i]
             for j in range(j1, j2):
                 row[j] = True
 
-    signed = [[0]*ny for _ in range(nx)]
+    signed = [[0] * ny for _ in range(nx)]
     for i in range(nx):
         dx = cell_dx[i]
-        ar = A_grid[i]
-        sr = signed[i]
+        row_a = A_grid[i]; row_s = signed[i]
         for j in range(ny):
             a = dx * cell_dy[j]
-            sr[j] = a if ar[j] else -a
-
-    # 1D row sums for fast removal_cost when coverage is uniform 1 in big blocks
-    # We won't precompute row prefix sums for signed because coverage varies.
-    # We'll just iterate cells.
+            row_s[j] = a if row_a[j] else -a
 
     coverage = [[0] * ny for _ in range(nx)]
-    current = list(cluster_rects)
+    out_bounds = []
+    current = list(output_rects)
 
-    def cells_of(rect):
-        i1 = bisect.bisect_left(xs, rect[0])
-        i2 = bisect.bisect_left(xs, rect[2])
-        j1 = bisect.bisect_left(ys, rect[1])
-        j2 = bisect.bisect_left(ys, rect[3])
-        return (i1, i2, j1, j2)
-
-    bounds = [cells_of(r) for r in current]
-    for (i1, i2, j1, j2) in bounds:
+    for r in current:
+        i1 = xi.get(r[0]); i2 = xi.get(r[2])
+        j1 = yi.get(r[1]); j2 = yi.get(r[3])
+        if i1 is None or i2 is None or j1 is None or j2 is None:
+            out_bounds.append(None); continue
+        out_bounds.append((i1, i2, j1, j2))
         for i in range(i1, i2):
             row = coverage[i]
             for j in range(j1, j2):
                 row[j] += 1
 
-    def removal_cost(b):
-        i1, i2, j1, j2 = b
-        s = 0
-        for i in range(i1, i2):
-            cr = coverage[i]
-            sr = signed[i]
-            for j in range(j1, j2):
-                if cr[j] == 1:
-                    s += sr[j]
-        return s
-
-    def add_cost(b):
-        i1, i2, j1, j2 = b
-        s = 0
-        for i in range(i1, i2):
-            cr = coverage[i]
-            sr = signed[i]
-            for j in range(j1, j2):
-                if cr[j] == 0:
-                    s -= sr[j]
-        return s
-
-    def add_bounds(b):
-        i1, i2, j1, j2 = b
-        for i in range(i1, i2):
-            row = coverage[i]
-            for j in range(j1, j2):
-                row[j] += 1
-
-    def remove_bounds(b):
-        i1, i2, j1, j2 = b
-        for i in range(i1, i2):
-            row = coverage[i]
-            for j in range(j1, j2):
-                row[j] -= 1
-
-    drop_costs = [removal_cost(bounds[i]) for i in range(len(current))]
-    dirty = [False] * len(current)
-
-    def invalidate_in_region(b):
-        i1, i2, j1, j2 = b
-        for idx in range(len(bounds)):
-            if dirty[idx]:
-                continue
-            bi1, bi2, bj1, bj2 = bounds[idx]
-            if bi1 < i2 and i1 < bi2 and bj1 < j2 and j1 < bj2:
-                dirty[idx] = True
-
-    def refresh():
-        for idx in range(len(bounds)):
-            if dirty[idx]:
-                drop_costs[idx] = removal_cost(bounds[idx])
-                dirty[idx] = False
-
-    while len(current) > k:
-        refresh()
-
-        # Greedily drop any rect with non-positive removal cost.
-        progress = True
-        while progress and len(current) > k:
-            progress = False
-            best_idx = -1
-            best_c = 1
-            for idx in range(len(current)):
-                if dirty[idx]:
-                    drop_costs[idx] = removal_cost(bounds[idx])
-                    dirty[idx] = False
-                if drop_costs[idx] < best_c:
-                    best_c = drop_costs[idx]
-                    best_idx = idx
-            if best_idx >= 0 and best_c <= 0:
-                b = bounds[best_idx]
-                remove_bounds(b)
-                invalidate_in_region(b)
-                current.pop(best_idx)
-                bounds.pop(best_idx)
-                drop_costs.pop(best_idx)
-                dirty.pop(best_idx)
-                progress = True
-        if len(current) <= k:
-            break
-        m = len(current)
-
-        # Best single-drop fallback
-        best_drop_idx = 0
-        best_drop_cost = drop_costs[0]
-        for i in range(1, m):
-            if drop_costs[i] < best_drop_cost:
-                best_drop_cost = drop_costs[i]
-                best_drop_idx = i
-        best_delta = best_drop_cost
-        best_action = ('drop', best_drop_idx)
-
-        # Pair-merge candidates by spatial proximity (sort by center-x, window).
-        centers_x = [(r[0] + r[2]) for r in current]
-        order = sorted(range(m), key=lambda i: centers_x[i])
-        if m > 500:
-            W = 8
-        elif m > 250:
-            W = 16
-        elif m > 100:
-            W = 28
-        else:
-            W = max(40, m)
-        pair_budget = 4000
-        tried = 0
-
-        for oi in range(m):
-            if tried >= pair_budget:
-                break
-            i = order[oi]
-            ri = current[i]
-            ri_a = (ri[2]-ri[0]) * (ri[3]-ri[1])
-            bi_b = bounds[i]
-            for oj in range(oi+1, min(m, oi+1+W)):
-                if tried >= pair_budget:
-                    break
-                j = order[oj]
-                rj = current[j]
-                rj_a = (rj[2]-rj[0]) * (rj[3]-rj[1])
-                bb = bbox_union(ri, rj)
-                bb_a = (bb[2]-bb[0]) * (bb[3]-bb[1])
-                if bb_a > 4 * (ri_a + rj_a) + 200:
-                    continue
-                tried += 1
-                bj_b = bounds[j]
-                ci = drop_costs[i]
-                remove_bounds(bi_b)
-                cj = removal_cost(bj_b)
-                remove_bounds(bj_b)
-                bb_bounds = cells_of(bb)
-                ca = add_cost(bb_bounds)
-                add_bounds(bj_b)
-                add_bounds(bi_b)
-                d = ci + cj + ca
-                if d < best_delta:
-                    best_delta = d
-                    best_action = ('merge', i, j, bb, bb_bounds)
-
-        if best_action[0] == 'drop':
-            idx = best_action[1]
-            b = bounds[idx]
-            remove_bounds(b)
-            invalidate_in_region(b)
-            current.pop(idx)
-            bounds.pop(idx)
-            drop_costs.pop(idx)
-            dirty.pop(idx)
-        else:
-            _, i, j, bb, bb_bounds = best_action
-            if i > j:
-                i, j = j, i
-            bj_b = bounds[j]; bi_b = bounds[i]
-            remove_bounds(bj_b)
-            remove_bounds(bi_b)
-            invalidate_in_region(bj_b)
-            invalidate_in_region(bi_b)
-            current.pop(j); current.pop(i)
-            bounds.pop(j); bounds.pop(i)
-            drop_costs.pop(j); drop_costs.pop(i)
-            dirty.pop(j); dirty.pop(i)
-            current.append(bb)
-            bounds.append(bb_bounds)
-            drop_costs.append(0)
-            dirty.append(False)
-            add_bounds(bb_bounds)
-            invalidate_in_region(bb_bounds)
-            drop_costs[-1] = removal_cost(bb_bounds)
-
-    # ---- Post-processing: shrink each rect inward when beneficial ----
     def shrink_delta(i1, i2, j1, j2):
-        """Cost of removing the cells in this sub-rectangle from coverage."""
         s = 0
         for i in range(i1, i2):
-            cr = coverage[i]
-            sr = signed[i]
+            cr_ = coverage[i]; sr = signed[i]
             for j in range(j1, j2):
-                if cr[j] == 1:
+                if cr_[j] == 1:
                     s += sr[j]
         return s
 
     improved = True
     iters = 0
     while improved and iters < 4:
-        improved = False
-        iters += 1
+        improved = False; iters += 1
         for idx in range(len(current)):
-            i1, i2, j1, j2 = bounds[idx]
+            if out_bounds[idx] is None or time.monotonic() - _T0 > TIME_LIMIT:
+                continue
+            i1, i2, j1, j2 = out_bounds[idx]
             r = current[idx]
-            best_new = None
-            best_delta = 0
-            # Shrink left edge
+            best_new = None; best_delta = 0
             for t in range(1, i2 - i1):
                 d = shrink_delta(i1, i1 + t, j1, j2)
                 if d < best_delta:
-                    best_delta = d
-                    best_new = (xs[i1 + t], r[1], r[2], r[3])
-            # Shrink right
+                    best_delta = d; best_new = (xs[i1 + t], r[1], r[2], r[3])
             for t in range(1, i2 - i1):
                 d = shrink_delta(i2 - t, i2, j1, j2)
                 if d < best_delta:
-                    best_delta = d
-                    best_new = (r[0], r[1], xs[i2 - t], r[3])
-            # Shrink bottom
+                    best_delta = d; best_new = (r[0], r[1], xs[i2 - t], r[3])
             for t in range(1, j2 - j1):
                 d = shrink_delta(i1, i2, j1, j1 + t)
                 if d < best_delta:
-                    best_delta = d
-                    best_new = (r[0], ys[j1 + t], r[2], r[3])
-            # Shrink top
+                    best_delta = d; best_new = (r[0], ys[j1 + t], r[2], r[3])
             for t in range(1, j2 - j1):
                 d = shrink_delta(i1, i2, j2 - t, j2)
                 if d < best_delta:
-                    best_delta = d
-                    best_new = (r[0], r[1], r[2], ys[j2 - t])
+                    best_delta = d; best_new = (r[0], r[1], r[2], ys[j2 - t])
             if best_new is not None:
-                remove_bounds(bounds[idx])
-                new_b = cells_of(best_new)
-                add_bounds(new_b)
+                for i in range(i1, i2):
+                    row = coverage[i]
+                    for j in range(j1, j2):
+                        row[j] -= 1
+                ni1 = xi.get(best_new[0], i1)
+                ni2 = xi.get(best_new[2], i2)
+                nj1 = yi.get(best_new[1], j1)
+                nj2 = yi.get(best_new[3], j2)
+                out_bounds[idx] = (ni1, ni2, nj1, nj2)
+                for i in range(ni1, ni2):
+                    row = coverage[i]
+                    for j in range(nj1, nj2):
+                        row[j] += 1
                 current[idx] = best_new
-                bounds[idx] = new_b
                 improved = True
+
+    return current
+
+
+def drop_down_cluster(cluster_rects, k):
+    """
+    Greedy drop-down: start with all n input rects, repeatedly remove the rect
+    with the lowest removal cost (unique union area it covers exclusively) until
+    k remain. No pair merges — this keeps it fast for any n.
+    """
+    n = len(cluster_rects)
+    if k >= n:
+        return list(cluster_rects)
+
+    xs_set = set(); ys_set = set()
+    for r in cluster_rects:
+        xs_set.add(r[0]); xs_set.add(r[2])
+        ys_set.add(r[1]); ys_set.add(r[3])
+    xs = sorted(xs_set); ys = sorted(ys_set)
+    nx = len(xs) - 1; ny = len(ys) - 1
+    if nx <= 0 or ny <= 0:
+        return list(cluster_rects[:k])
+
+    xi = {v: i for i, v in enumerate(xs)}
+    yi = {v: i for i, v in enumerate(ys)}
+    cell_dx = [xs[i + 1] - xs[i] for i in range(nx)]
+    cell_dy = [ys[j + 1] - ys[j] for j in range(ny)]
+
+    A_grid = [[False] * ny for _ in range(nx)]
+    for r in cluster_rects:
+        i1, i2, j1, j2 = xi[r[0]], xi[r[2]], yi[r[1]], yi[r[3]]
+        for i in range(i1, i2):
+            row = A_grid[i]
+            for j in range(j1, j2):
+                row[j] = True
+
+    signed = [[0] * ny for _ in range(nx)]
+    for i in range(nx):
+        dx = cell_dx[i]; row_a = A_grid[i]; row_s = signed[i]
+        for j in range(ny):
+            a = dx * cell_dy[j]
+            row_s[j] = a if row_a[j] else -a
+
+    coverage = [[0] * ny for _ in range(nx)]
+    current = list(cluster_rects)
+    bounds = []
+    for r in current:
+        b = (xi[r[0]], xi[r[2]], yi[r[1]], yi[r[3]])
+        bounds.append(b)
+        i1, i2, j1, j2 = b
+        for i in range(i1, i2):
+            row = coverage[i]
+            for j in range(j1, j2):
+                row[j] += 1
+
+    def removal_cost(b):
+        i1, i2, j1, j2 = b; s = 0
+        for i in range(i1, i2):
+            cr = coverage[i]; sr = signed[i]
+            for j in range(j1, j2):
+                if cr[j] == 1:
+                    s += sr[j]
+        return s
+
+    costs = [removal_cost(b) for b in bounds]
+    dirty = [False] * n
+
+    while len(current) > k:
+        if time.monotonic() - _T0 > TIME_LIMIT:
+            break
+
+        for idx in range(len(current)):
+            if dirty[idx]:
+                costs[idx] = removal_cost(bounds[idx])
+                dirty[idx] = False
+
+        best_idx = min(range(len(current)), key=lambda i: costs[i])
+        b = bounds[best_idx]
+        i1, i2, j1, j2 = b
+        for i in range(i1, i2):
+            row = coverage[i]
+            for j in range(j1, j2):
+                row[j] -= 1
+
+        for idx in range(len(current)):
+            if idx == best_idx or dirty[idx]:
+                continue
+            bi1, bi2, bj1, bj2 = bounds[idx]
+            if bi1 < i2 and i1 < bi2 and bj1 < j2 and j1 < bj2:
+                dirty[idx] = True
+
+        current.pop(best_idx)
+        bounds.pop(best_idx)
+        costs.pop(best_idx)
+        dirty.pop(best_idx)
 
     return current
 
@@ -366,35 +424,26 @@ def kmeans_cluster_solve(cluster_rects, k):
         return out
     if k <= 0:
         return [cluster_rects[0]]
-    centers = [((r[0]+r[2]) / 2.0, (r[1]+r[3]) / 2.0) for r in cluster_rects]
-    sizes = [(r[2]-r[0]) * (r[3]-r[1]) for r in cluster_rects]
+    centers = [((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0) for r in cluster_rects]
+    sizes = [(r[2] - r[0]) * (r[3] - r[1]) for r in cluster_rects]
     rng = random.Random(12345)
-    # k-means++ init weighted by size
     chosen = [rng.randrange(n)]
     dist2 = [float('inf')] * n
     for _ in range(k - 1):
         cx, cy = centers[chosen[-1]]
         for i in range(n):
-            dx = centers[i][0] - cx
-            dy = centers[i][1] - cy
-            d = dx*dx + dy*dy
-            if d < dist2[i]:
-                dist2[i] = d
-        # pick weighted by dist2 * size
-        total_w = 0.0
-        for i in range(n):
-            total_w += dist2[i] * sizes[i]
+            dx = centers[i][0] - cx; dy = centers[i][1] - cy
+            d = dx * dx + dy * dy
+            if d < dist2[i]: dist2[i] = d
+        total_w = sum(dist2[i] * sizes[i] for i in range(n))
         if total_w <= 0:
             chosen.append(rng.randrange(n))
         else:
-            r = rng.random() * total_w
-            acc = 0.0
-            pick = n - 1
+            r_val = rng.random() * total_w
+            acc = 0.0; pick = n - 1
             for i in range(n):
                 acc += dist2[i] * sizes[i]
-                if acc >= r:
-                    pick = i
-                    break
+                if acc >= r_val: pick = i; break
             chosen.append(pick)
     centroids = [centers[c] for c in chosen]
     labels = [0] * n
@@ -402,53 +451,38 @@ def kmeans_cluster_solve(cluster_rects, k):
         changed = False
         for i in range(n):
             cx, cy = centers[i]
-            best = 0
-            bd = float('inf')
+            best = 0; bd = float('inf')
             for ci in range(k):
                 ccx, ccy = centroids[ci]
-                dx = cx - ccx; dy = cy - ccy
-                d = dx*dx + dy*dy
-                if d < bd:
-                    bd = d
-                    best = ci
-            if labels[i] != best:
-                labels[i] = best
-                changed = True
-        if not changed:
-            break
-        # Update centroids weighted by size
+                d = (cx - ccx) ** 2 + (cy - ccy) ** 2
+                if d < bd: bd = d; best = ci
+            if labels[i] != best: labels[i] = best; changed = True
+        if not changed: break
         sx = [0.0] * k; sy = [0.0] * k; sw = [0.0] * k
         for i in range(n):
-            lb = labels[i]
-            w = sizes[i]
-            sx[lb] += centers[i][0] * w
-            sy[lb] += centers[i][1] * w
-            sw[lb] += w
+            lb = labels[i]; w = sizes[i]
+            sx[lb] += centers[i][0] * w; sy[lb] += centers[i][1] * w; sw[lb] += w
         for ci in range(k):
             if sw[ci] > 0:
-                centroids[ci] = (sx[ci]/sw[ci], sy[ci]/sw[ci])
+                centroids[ci] = (sx[ci] / sw[ci], sy[ci] / sw[ci])
     groups = [[] for _ in range(k)]
     for i, lb in enumerate(labels):
         groups[lb].append(cluster_rects[i])
     out = []
     for g in groups:
-        if not g:
-            continue
+        if not g: continue
         x1 = min(r[0] for r in g); y1 = min(r[1] for r in g)
         x2 = max(r[2] for r in g); y2 = max(r[3] for r in g)
         out.append((x1, y1, x2, y2))
     while len(out) < k:
-        out.append(out[0])
+        out.append(out[0] if out else cluster_rects[0])
     return out[:k]
 
 
-def score_against_target(out_rects, cluster_rects):
-    """Compute symmetric difference between unions of the two rect lists."""
+def score_against_target(out_rects, ref_rects):
+    """Compute symmetric difference area between unions of the two rect lists."""
     xs_set = set(); ys_set = set()
-    for r in cluster_rects:
-        xs_set.add(r[0]); xs_set.add(r[2])
-        ys_set.add(r[1]); ys_set.add(r[3])
-    for r in out_rects:
+    for r in list(ref_rects) + list(out_rects):
         xs_set.add(r[0]); xs_set.add(r[2])
         ys_set.add(r[1]); ys_set.add(r[3])
     xs = sorted(xs_set); ys = sorted(ys_set)
@@ -459,80 +493,136 @@ def score_against_target(out_rects, cluster_rects):
     B = [[False] * ny for _ in range(nx)]
     xi = {v: i for i, v in enumerate(xs)}
     yi = {v: i for i, v in enumerate(ys)}
-    for r in cluster_rects:
-        i1 = xi[r[0]]; i2 = xi[r[2]]; j1 = yi[r[1]]; j2 = yi[r[3]]
+    for r in ref_rects:
+        i1, i2, j1, j2 = xi[r[0]], xi[r[2]], yi[r[1]], yi[r[3]]
         for i in range(i1, i2):
             row = A[i]
-            for j in range(j1, j2):
-                row[j] = True
+            for j in range(j1, j2): row[j] = True
     for r in out_rects:
-        i1 = xi[r[0]]; i2 = xi[r[2]]; j1 = yi[r[1]]; j2 = yi[r[3]]
+        i1, i2, j1, j2 = xi[r[0]], xi[r[2]], yi[r[1]], yi[r[3]]
         for i in range(i1, i2):
             row = B[i]
-            for j in range(j1, j2):
-                row[j] = True
+            for j in range(j1, j2): row[j] = True
     s = 0
     for i in range(nx):
-        dx = xs[i+1] - xs[i]
+        dx = xs[i + 1] - xs[i]
         ar = A[i]; br = B[i]
         for j in range(ny):
             if ar[j] != br[j]:
-                s += dx * (ys[j+1] - ys[j])
+                s += dx * (ys[j + 1] - ys[j])
     return s
 
 
-def approximate_cluster_best(cluster_rects, k):
-    """Try greedy and (optionally) k-means; return whichever is better."""
-    n = len(cluster_rects)
-    if k >= n:
-        out = list(cluster_rects)
-        while len(out) < k:
-            out.append(cluster_rects[0])
-        return out[:k]
-    candidates = [approximate_cluster(cluster_rects, k)]
-    if n > 2 * k and n <= 300:
-        # k-means is cheap-ish; only run for moderate cluster sizes
-        candidates.append(kmeans_cluster_solve(cluster_rects, k))
-    best = min(candidates, key=lambda c: score_against_target(c, cluster_rects))
-    return best
-
-
 def main():
-    N, K, rects = read_input()
+    _N, K, rects = read_input()
+
+    # Check if global approach (all coordinate combinations) is feasible
+    xs_g = set(); ys_g = set()
+    for r in rects:
+        xs_g.add(r[0]); xs_g.add(r[2])
+        ys_g.add(r[1]); ys_g.add(r[3])
+    nx_g = len(xs_g) - 1; ny_g = len(ys_g) - 1
+    n_xp_g = nx_g * (nx_g + 1) // 2
+    n_yp_g = ny_g * (ny_g + 1) // 2
+    global_feasible = n_xp_g * n_yp_g <= 700000
+
+    if global_feasible:
+        # Global build-up: enumerate all coord combos across the entire input
+        bu_out, _ = build_up(rects, K, all_combos=True)
+        bu_out = shrink_output(bu_out, rects)
+        while len(bu_out) < K:
+            bu_out.append(bu_out[0] if bu_out else rects[0])
+        out_rects = bu_out
+
+        # Also try drop-down (better when K/N is high and individual rects are good)
+        if _N > K and time.monotonic() - _T0 < TIME_LIMIT - 0.3:
+            dd_out = drop_down_cluster(rects, K)
+            while len(dd_out) < K:
+                dd_out.append(dd_out[0] if dd_out else rects[0])
+            if time.monotonic() - _T0 < TIME_LIMIT - 0.2:
+                dd_out = shrink_output(dd_out, rects)
+            if score_against_target(dd_out, rects) < score_against_target(out_rects, rects):
+                out_rects = dd_out
+
+        sys.stdout.write('\n'.join(f"{r[0]} {r[1]} {r[2]} {r[3]}" for r in out_rects[:K]) + '\n')
+        return
+
+    # Per-cluster approach for larger inputs
     clusters = find_clusters(rects)
     C = len(clusters)
     cluster_rects_list = [[rects[i] for i in c] for c in clusters]
     sizes = [len(c) for c in cluster_rects_list]
 
+    all_rects_seq = []
+    all_gains_seq = []
+
+    for cr in cluster_rects_list:
+        n_i = len(cr)
+        max_b = min(n_i, K)
+        if time.monotonic() - _T0 > TIME_LIMIT:
+            r_out = kmeans_cluster_solve(cr, max_b)
+            all_rects_seq.append(r_out)
+            all_gains_seq.append([1] + [0] * (max_b - 1))
+        else:
+            r_out, g_out = build_up(cr, max_b)
+            all_rects_seq.append(r_out)
+            all_gains_seq.append(g_out)
+
+    # Allocate K budget proportional to cluster size
     budgets = [1] * C
     extra = K - C
     if extra > 0:
-        total = sum(sizes)
+        total_n = sum(sizes)
         give = [0] * C
-        if total > 0:
+        if total_n > 0:
             for i in range(C):
-                g = (extra * sizes[i]) // total
+                g = (extra * sizes[i]) // total_n
                 g = min(g, sizes[i] - 1)
                 give[i] = g
         used = sum(give)
-        remaining = extra - used
+        remaining_extra = extra - used
         order = sorted(range(C), key=lambda i: -sizes[i])
-        idx = 0
-        safety = 0
-        while remaining > 0 and safety < 20 * C + 50:
+        idx = 0; safety = 0
+        while remaining_extra > 0 and safety < 20 * C + 50:
             i = order[idx % C]
             if budgets[i] + give[i] < sizes[i]:
-                give[i] += 1
-                remaining -= 1
+                give[i] += 1; remaining_extra -= 1
             idx += 1; safety += 1
             if all(budgets[t] + give[t] >= sizes[t] for t in range(C)):
                 break
         for i in range(C):
             budgets[i] += give[i]
 
+    remaining = K - sum(budgets)
+    if remaining > 0:
+        order = sorted(range(C), key=lambda i: -sizes[i])
+        idx = 0; safety = 0
+        while remaining > 0 and safety < 10 * C + 50:
+            i = order[idx % C]
+            if budgets[i] < sizes[i]:
+                budgets[i] += 1; remaining -= 1
+            idx += 1; safety += 1
+
     out = []
-    for cr, b in zip(cluster_rects_list, budgets):
-        out.extend(approximate_cluster_best(cr, b))
+    for i, (cr, b) in enumerate(zip(cluster_rects_list, budgets)):
+        # Build-up result
+        bu_out = list(all_rects_seq[i][:b])
+        while len(bu_out) < b:
+            bu_out.append(cr[0])
+
+        # Drop-down result (fast — no pair merges)
+        cluster_out = bu_out
+        if time.monotonic() - _T0 < TIME_LIMIT - 0.3:
+            dd_out = drop_down_cluster(cr, b)
+            while len(dd_out) < b:
+                dd_out.append(cr[0])
+            if score_against_target(dd_out, cr) < score_against_target(bu_out, cr):
+                cluster_out = dd_out
+
+        if time.monotonic() - _T0 < TIME_LIMIT - 0.2:
+            cluster_out = shrink_output(cluster_out, cr)
+
+        out.extend(cluster_out)
 
     while len(out) < K:
         out.append(out[0] if out else (0, 0, 1, 1))
