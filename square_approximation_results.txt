@@ -1,0 +1,330 @@
+IIMOC
+Time limit:
+10s
+Memory limit:
+512m
+Tests:
+60
+Package:
+Download
+Rectangle Approximation
+Problem
+You are given 
+ axis-aligned rectangles with integer coordinates, and a parameter 
+. Output exactly 
+ axis-aligned rectangles (with integer coordinates) that best approximate the union of the original 
+ rectangles.
+
+Let 
+ denote the union of the 
+ input rectangles and 
+ denote the union of your 
+ output rectangles. The score for a test case is:
+
+
+where 
+ is the area of the symmetric difference and 
+ is the area of 
+ (measured in unit squares). A higher score is better; a perfect score of 
+ is achieved when 
+.
+
+This is an optimization problem: any feasible output is accepted and scored.
+
+Input
+N K
+x1_1 y1_1 x2_1 y2_1
+x1_2 y1_2 x2_2 y2_2
+...
+x1_N y1_N x2_N y2_N
+Each rectangle is given as 
+ with 
+ and 
+, 
+, all integers
+The 
+ input rectangles may overlap each other.
+Output
+Output exactly 
+ lines, each describing one axis-aligned rectangle:
+
+x1_1 y1_1 x2_1 y2_1
+x1_2 y1_2 x2_2 y2_2
+...
+x1_K y1_K x2_K y2_K
+Each output rectangle must satisfy:
+
+, all integers
+, all integers
+The 
+ output rectangles may overlap each other.
+
+Examples
+Example 1
+Input (smalltest/1.in)
+
+20 15
+43 1 45 2
+34 2 35 3
+40 2 43 3
+33 3 34 4
+34 2 36 3
+20 14 21 17
+1 33 3 35
+33 3 34 4
+31 3 34 4
+47 35 49 37
+41 41 42 44
+42 39 44 42
+20 29 21 31
+31 3 32 4
+21 18 22 21
+32 2 37 3
+34 3 35 4
+20 15 21 19
+20 17 21 19
+20 11 21 12
+Output (smalltest/1.output)
+
+42 39 44 42
+32 2 37 3
+1 33 3 35
+47 35 49 37
+20 15 21 19
+40 2 43 3
+20 14 21 17
+31 3 34 4
+41 41 42 44
+21 18 22 21
+43 1 45 2
+34 2 36 3
+20 29 21 31
+20 17 21 19
+34 2 35 3
+Score: 0.9524 — With 
+ out of 
+ input rectangles (
+, 
+), the 15 output rectangles miss 2 unit squares from two small input rectangles that were dropped.
+
+Example 1 visualization
+
+Example 2
+Input (smalltest/2.in)
+
+17 9
+17 35 26 36
+22 38 24 41
+25 43 28 44
+24 46 27 47
+24 46 26 47
+26 44 28 45
+7 35 17 36
+25 43 28 45
+26 43 28 44
+7 35 14 36
+27 45 30 46
+22 36 25 37
+21 35 23 36
+3 36 5 37
+26 45 29 46
+21 36 24 37
+26 43 30 44
+Output (smalltest/2.output)
+
+22 38 24 41
+24 46 27 47
+27 43 30 44
+25 43 28 45
+7 35 14 36
+21 35 25 37
+26 45 30 46
+3 36 5 37
+14 35 26 36
+Score: 1.0000 — Despite using only 9 out of 17 rectangles, the 9 output rectangles achieve a perfect score: their union exactly covers 
+ unit squares with no symmetric difference (
+).
+
+Example 2 visualization
+
+Example 3
+Input (smalltest/3.in)
+
+3 3
+24 33 25 36
+25 29 26 34
+48 7 49 12
+Output (smalltest/3.output)
+
+25 29 26 34
+48 7 49 12
+24 33 25 36
+Score: 1.0000 — With 
+, outputting the same three rectangles (in any order) reproduces 
+ exactly: 
+, 
+.
+
+Example 3 visualization
+
+Feasibility Requirements
+Your output is feasible if and only if it contains exactly 
+ valid rectangles as described above. An infeasible output receives a score of 0 on that test.
+
+Scoring
+For a feasible output, the per-test score is:
+
+
+where areas are measured in unit squares. The overall judge score is the average of per-test scores across all test cases.
+
+Test Generation
+There are 30 judge test cases. Each test is generated using an organic clumping process:
+
+Rectangle generation — Rectangles are built one at a time:
+
+The first rectangle, and each subsequent rectangle with 30% probability, is placed at a fresh random position and size.
+Otherwise (70% probability), an existing rectangle is chosen at random and mutated: its center is shifted by Gaussian noise proportional to its own dimensions, and its size is scaled by a log-normal factor, then clamped to the coordinate bounds.
+All rectangles are shuffled before output so the generation order is not visible.
+Parameter ranges:
+
+ is drawn uniformly from 
+Coordinates are integers in 
+Choosing 
+ — Rather than picking 
+ uniformly, 
+ is tied to the structural complexity of the generated rectangles:
+
+The overlapping-cluster count 
+ is computed: two rectangles are in the same cluster if their interiors intersect (directly or transitively).
+ is drawn uniformly from 
+.
+This means 
+, so you always have at least enough rectangles to represent every disjoint cluster, but 
+ is generally much smaller than 
+, requiring non-trivial merging of overlapping rectangles within each cluster.
+
+Constraints
+Time limit: 5 seconds
+Memory limit: 512 MB
+Language
+
+Python
+Team Name
+your team
+Team Password
+••••••••
+If you don't have a password, please contact edwin.chen@iimoc.org and we will fix it within a day. Alternatively, go to the Signup page to create your team credentials.
+
+Submit your solution
+print('hello')
+Submit Solution
+Leaderboard
+Page size
+
+100
+Prev
+Page 1 / 3 • Total 280
+Next
+Refresh
+Target: 58.670945999999994 | Baseline: 0
+Rank	Team	Score	Raw	ID
+1	Moo	100.00%	58.670945999999994	9034
+2	AMR	99.97%	58.65079199999999	6641
+3	flyhomebuddyiwearcologne	99.95%	58.640921999999975	7859
+4	crashdummy	99.94%	58.63568999999999	4608
+5	hlamxnska	99.92%	58.626419	8490
+6	voyage	99.92%	58.62232100000001	8997
+7	Nextquant	99.91%	58.62090499999999	6615
+8	HITOORI	99.89%	58.60383299999999	8600
+9	IITMadras_HNG	99.88%	58.602815000000014	8721
+10	冰冻野鸡大学	99.76%	58.532088999999985	8345
+11	Maximum	99.75%	58.52500300000001	8699
+12	M3F4S0	99.59%	58.431713	9060
+13	Snakes	99.48%	58.368405	7190
+14	Wenhao Lu	99.19%	58.19693999999999	9174
+15	luh search	99.01%	58.087661999999995	4494
+16	AntonEgo	98.24%	57.63595999999999	6627
+17	Ponderer	95.50%	56.03330500000001	6497
+18	life	94.56%	55.47668999999999	3486
+19	TheGGoat	94.56%	55.47668999999999	3736
+20	Keller Crunchers	93.42%	54.811981	3658
+21	Chem Reactors	92.88%	54.491505000000004	7274
+22	aryam abdo al-begali	92.43%	54.227716	8784
+23	My Team	92.43%	54.227615	3622
+24	finding a hashmap that doesn't exist	71.95%	42.21318400000002	8402
+25	C-Cashier	46.07%	27.02904299999999	5513
+26	nate	45.83%	26.888809000000002	2369
+27	Jason	44.12%	25.887823000000004	3373
+28	Kristen Chiapperini	41.66%	24.44072	3314
+29	hallpass	26.29%	15.422446000000003	2346
+30	SQ	6.10%	3.576189	2345
+31	Zerui Li	0.00%	0	533
+32	asdfasdfasd	0.00%	0	1320
+33	Pravesh	0.00%	0	1324
+34	hackathon	0.00%	0	1321
+35	Schanizade	0.00%	0	1322
+36	Tom	0.00%	0	1327
+37	poasdfapsdf	0.00%	0	1323
+38	Threyeth	0.00%	0	1328
+39	EFT	0.00%	0	1329
+40	GlobalMax	0.00%	0	1325
+41	Some1	0.00%	0	1331
+42	snakes	0.00%	0	1332
+43	Mathnerd	0.00%	0	1334
+44	Ladybugs	0.00%	0	1335
+45	Artic Seagull	0.00%	0	1336
+46	TopG	0.00%	0	1339
+47	Asian_coalition_of_nerds	0.00%	0	1341
+48	Millburn Mathletes	0.00%	0	1342
+49	DO NOT SNAKE ME	0.00%	0	1337
+50	Xerxes	0.00%	0	1343
+51	Natural Intelligence	0.00%	0	1344
+52	Three Misketeers	0.00%	0	1340
+53	Sid	0.00%	0	1345
+54	RAHMAT	0.00%	0	1346
+55	Yachao Fan Club	0.00%	0	1348
+56	Iitrpr	0.00%	0	1349
+57	topgun	0.00%	0	1350
+58	C--	0.00%	0	1351
+59	ANOnymou5	0.00%	0	1352
+60	Tourist	0.00%	0	1353
+61	Daredevil	0.00%	0	1354
+62	_gheekhatam_	0.00%	0	1355
+63	Chevrolet_Niva	0.00%	0	1356
+64	MOUSTAFA	0.00%	0	1357
+65	Bit_Mask	0.00%	0	1358
+66	Anahita	0.00%	0	1360
+67	VSolo	0.00%	0	1361
+68	Godsend	0.00%	0	1362
+69	NoBadBeat	0.00%	0	1363
+70	Nah, I'd Lose	0.00%	0	1364
+71	ThayirSoru	0.00%	0	1365
+72	Hehhe	0.00%	0	1366
+73	shad_07	0.00%	0	1367
+74	TOURISTS	0.00%	0	1368
+75	EENA MEENA DEEKA	0.00%	0	1369
+76	Compile and Pray (CP)	0.00%	0	1370
+77	The Claw	0.00%	0	1371
+78	naming things is hard for programmers	0.00%	0	1372
+79	Team5721	0.00%	0	1373
+80	asdfa	0.00%	0	1374
+81	RAHMAT_9009	0.00%	0	1375
+82	A Scoundrat	0.00%	0	1377
+83	benqspark	0.00%	0	1379
+84	GUGUGAGA	0.00%	0	1381
+85	justatest	0.00%	0	1383
+86	orangecat	0.00%	0	1384
+87	nub	0.00%	0	1385
+88	Binminh	0.00%	0	1386
+89	OctaveSolo	0.00%	0	1387
+90	S.P.A.C.E.	0.00%	0	1388
+91	Neural Ninja	0.00%	0	1389
+92	gradientAscent	0.00%	0	1390
+93	TestRunKenneth	0.00%	0	1391
+94	INVINCIBLE	0.00%	0	1392
+95	Tanmay	0.00%	0	1393
+96	Vivek	0.00%	0	1394
+97	Pedro	0.00%	0	1395
+98	Julien	0.00%	0	1396
+99	Lukas_A	0.00%	0	1397
+100	Fabian_G	0.00%	0	1398
