@@ -23,7 +23,7 @@ def solve():
 
     _fb_cache = {}
     def full_blocks(s):
-        """All (l,r) with sum s. Sorted (r ASC, l DESC) — prefer shorter blocks."""
+        """All blocks with sum s, sorted by right end then by length."""
         if s in _fb_cache:
             return _fb_cache[s]
         out = []
@@ -37,7 +37,7 @@ def solve():
         return out
 
     def greedy_count(s):
-        """Max non-overlapping blocks for sum s. O(n)."""
+        """How many non-overlapping blocks of sum s we can fit."""
         cnt = 0
         seen = {P[0]: 0}
         for r in range(1, n + 1):
@@ -50,7 +50,7 @@ def solve():
         return cnt
 
     def merge(A, Bl):
-        """Merge two sorted (r asc, l desc) block lists. O(|A|+|Bl|)."""
+        """Merge two sorted block lists."""
         res = []; i = j = 0; la, lb = len(A), len(Bl)
         while i < la and j < lb:
             ra, la_ = A[i]; rb, lb_ = Bl[j]
@@ -70,7 +70,7 @@ def solve():
         return cnt
 
     def evaluate(sum_list):
-        """Activity select with color tracking. Returns (obj, [(l,r,s)])."""
+        """Pick a non-overlapping set greedily. Returns (obj, blocks)."""
         tagged = []
         for s in sum_list:
             for r, l in full_blocks(s):
@@ -95,11 +95,10 @@ def solve():
         if obj > best_obj:
             best_obj = obj; best_sol = list(chosen)
 
-    # --- Candidate generation ---
-    # All single-element values present in array.
+    # Candidate sums. Start with every value that shows up in the array.
     cands = set(v for v in range(51) if freq[v] > 0)
 
-    # Multi-element sums from windows of size 2..20.
+    # Then common sums of short windows.
     mfreq = defaultdict(int)
     for start in range(n):
         s = 0
@@ -113,16 +112,15 @@ def solve():
         if c >= thr:
             cands.add(s)
 
-    # Rank by greedy count; keep top candidates.
+    # Keep the sums that fit the most blocks.
     gcnt = {s: greedy_count(s) for s in cands}
     sorted_cands = sorted(cands, key=lambda s: -gcnt[s])[:max(70, B * 6)]
 
-    # Precompute block lists for all candidates.
+    # Precompute block lists.
     for s in sorted_cands:
         full_blocks(s)
 
-    # --- Phase 1: Quick single-element optimal (exact, no activity select needed) ---
-    # OBJ = alpha*sum(freq[v]) - beta*C is exact since single-element blocks never overlap.
+    # Phase 1: single-element blocks only. Exact, since they never overlap.
     se_vals = sorted([v for v in range(51) if freq[v] > 0], key=lambda v: -freq[v])
     se_set = []
     for v in se_vals:
@@ -135,15 +133,14 @@ def solve():
     if not se_set and se_vals:
         se_set = [se_vals[0]]
 
-    # Evaluate all prefix lengths with full blocks (captures multi-element bonus).
+    # Try each prefix, this time allowing longer blocks too.
     fm0 = []
     for i, v in enumerate(se_set):
         fm0 = merge(fm0, full_blocks(v))
         obj, chosen = evaluate(se_set[:i + 1])
         try_update(obj, chosen)
 
-    # --- Phase 2: Greedy forward pass over all candidates ---
-    # Uses incremental merge (O(k) per trial), calls evaluate() once per iteration.
+    # Phase 2: add colors one at a time, best gain first.
     cur_set = []
     cur_merged = []
     cur_obj = 0
@@ -174,10 +171,9 @@ def solve():
         cur_C = len(set(s for _, _, s in chosen)) if chosen else 0
         try_update(obj, chosen)
 
-    # --- Phase 3: Swap refinement ---
-    # Time-budgeted: only runs if enough time remains (avoids TLE on large cases).
-    # Uses prefix/suffix precomputed merges so each trial is O(k), not O(B*k).
-    TIME_BUDGET = 2.4  # seconds; leave margin under the 3s judge limit
+    # Phase 3: try swapping one color out for another. Prefix/suffix merges
+    # keep each trial cheap, and the time check keeps big cases from TLEing.
+    TIME_BUDGET = 2.4  # judge limit is 3s
     if cur_set and len(cur_merged) < 40000 and time.monotonic() - _t0 < TIME_BUDGET:
         for _ in range(3):
             if time.monotonic() - _t0 >= TIME_BUDGET:
@@ -227,7 +223,7 @@ def solve():
             if not swapped:
                 break
 
-    # --- Output ---
+    # Output. Renumber the sums we actually used into colors 1..C.
     if best_obj <= 0 or not best_sol:
         print(0)
         return

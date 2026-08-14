@@ -1,22 +1,5 @@
 #!/usr/bin/env python3
-"""
-Rectangle Approximation — zero-excess greedy partition + edge sliding.
-
-Strategy:
-- Split the input into overlapping clusters (disjoint interiors); solve each
-  independently, then concatenate.
-- Per cluster, build_up greedily places the largest rectangle that lies fully
-  inside A and is not yet covered (largest_rect_in_A, histogram method, zero
-  excess). On small grids it can instead use the true max-gain rectangle via
-  2D Kadane, but zero-excess greedy wins on the judge distribution.
-- Budget K is allocated across clusters from scratch by marginal gain (each
-  rect's gain == reduction in |A△B|), so the globally largest next rects win.
-- Post-process every cluster with optimize_edges: slide each output rect's four
-  edges outward (swallow adjacent uncovered area) or inward (trim excess),
-  accepting only score-improving moves. This and a relocation pass
-  (refine_cluster) alternate as time-bounded coordinate descent.
-- Defensive grid-size caps keep pathological dense clusters within the limit.
-"""
+"""Rectangle Approximation. See README.md for how this works."""
 import sys
 import random
 import time
@@ -71,12 +54,7 @@ def find_clusters(rects):
 
 
 def max_sum_subrect(val, nx, ny):
-    """2D Kadane: maximum-sum subrectangle of grid val (nx x ny).
-
-    For every pair of x-rows (i1..i2) we accumulate column sums and run 1D
-    Kadane over y. O(nx^2 * ny). Returns (best_sum, (i1, i2, j1, j2)) with
-    i2/j2 exclusive, or (0, None) if no positive-sum rectangle exists.
-    """
+    """2D Kadane. Returns (best_sum, (i1, i2, j1, j2)) with i2, j2 exclusive."""
     best = 0
     res = None
     for i1 in range(nx):
@@ -100,14 +78,7 @@ def max_sum_subrect(val, nx, ny):
 
 
 def largest_rect_in_A(avail, nx, ny, cell_dx, cell_dy):
-    """Largest-area axis-aligned rectangle whose cells are ALL available (in A
-    and not yet covered). Zero-excess by construction.
-
-    Sweeps x-rows maintaining, per y-column, the accumulated x-width of the
-    consecutive available run; each row solves a variable-width largest-
-    rectangle-in-histogram (bar height = run width in x, bar width = cell_dy).
-    O(nx * ny). Returns (best_area, (i1, i2, j1, j2)) or (0, None).
-    """
+    """Biggest rectangle made only of available cells, via histogram sweep."""
     best = 0
     res = None
     w = [0.0] * ny
@@ -125,7 +96,7 @@ def largest_rect_in_A(avail, nx, ny, cell_dx, cell_dy):
                 w[j] += dx
             else:
                 w[j] = 0.0
-        st = []  # (height_w, ystart_index, xstart_row)
+        st = []  # (width, ystart, xstart)
         for j in range(ny):
             h = w[j]
             if not st or h > st[-1][0]:
@@ -151,12 +122,7 @@ def largest_rect_in_A(avail, nx, ny, cell_dx, cell_dy):
 
 
 def refine_cluster(cluster_rects, out_rects, deadline):
-    """Local search: repeatedly remove the output rect with the least exclusive
-    in-A coverage and re-place the largest rectangle that now fits in the
-    uncovered region. A swap is kept only when the new rect covers strictly
-    more new in-A area than the removed rect exclusively held — i.e. freeing a
-    redundant rect let a bigger rectangle form elsewhere. Zero excess preserved.
-    """
+    """Drop the weakest output rect and re-place it somewhere better."""
     b = len(out_rects)
     if b == 0:
         return out_rects
@@ -241,25 +207,16 @@ def refine_cluster(cluster_rects, out_rects, deadline):
     return cur
 
 
-# build_up's per-step primitive. Zero-excess maximal rectangles
-# (largest_rect_in_A) empirically beat max-gain Kadane on the judge
-# distribution: greedy beneficial-excess does not pay off globally, so we
-# default to histogram everywhere. Kadane is still used when all_combos is
-# forced (tiny global-feasible inputs).
+# 0 means never use Kadane in build_up. Histogram scored better.
 KADANE_THRESH = 0
 
-
-# Defensive caps. The per-cell passes (grid construction, histogram, edge
-# sliding) cost O(nx*ny) and O(sum of compressed rect areas). Clusters this
-# large do not arise in the judge distribution (gen.py shrinks rectangles as N
-# grows), but a pathological dense cluster could blow the time limit, so any
-# cluster above these caps falls back to a cheap rect selection.
+# Grid size caps. Anything bigger falls back to a cheap answer.
 CELL_CAP = 250000
 WORK_CAP = 4000000
 
 
 def _grid_work(rects, xi, yi):
-    """Total compressed-grid cell writes needed to rasterise rects (O(len))."""
+    """How many grid cells drawing these rects would cost."""
     w = 0
     for r in rects:
         w += (xi[r[2]] - xi[r[0]]) * (yi[r[3]] - yi[r[1]])
@@ -269,7 +226,7 @@ def _grid_work(rects, xi, yi):
 
 
 def _largest_rects_fallback(input_rects, k):
-    """Fast, grid-free fallback: the k largest-area input rectangles."""
+    """Fallback with no grid at all: the k biggest input rects."""
     ordered = sorted(input_rects, key=lambda r: (r[2] - r[0]) * (r[3] - r[1]),
                      reverse=True)
     out = ordered[:k]
@@ -280,24 +237,12 @@ def _largest_rects_fallback(input_rects, k):
 
 
 def build_up(input_rects, k, all_combos=False):
-    """
-    Greedy build-up: at each step add the rectangle that most reduces |A△B|.
-
-    gain(R) = area(R ∩ A-not-yet-covered) − area(R ∩ not-A-not-yet-covered).
-
-    The best such rectangle is the maximum-sum subrectangle of a signed grid
-    (+cell area inside A, −cell area outside A). For grids where that is
-    affordable we use 2D Kadane (max_sum_subrect), which lets a rect take on
-    beneficial excess. For very large grids we fall back to the largest fully-
-    inside-A rectangle (largest_rect_in_A): zero excess, O(nx*ny) per step.
-
-    Returns (output_rects, marginal_gains), both length k.
-    """
+    """Add rects one at a time, best gain first. Returns (rects, gains)."""
     n = len(input_rects)
     if k == 0:
         return [], []
 
-    # --- Coordinate compression ---
+    # Coordinate compression.
     xs_set = set(); ys_set = set()
     for r in input_rects:
         xs_set.add(r[0]); xs_set.add(r[2])
@@ -317,7 +262,7 @@ def build_up(input_rects, k, all_combos=False):
     cell_dx = [xs[i + 1] - xs[i] for i in range(nx)]
     cell_dy = [ys[j + 1] - ys[j] for j in range(ny)]
 
-    # --- in-A grid ---
+    # Mark cells inside A.
     inA = [[False] * ny for _ in range(nx)]
     for r in input_rects:
         i1, i2, j1, j2 = xi[r[0]], xi[r[2]], yi[r[1]], yi[r[3]]
@@ -331,7 +276,7 @@ def build_up(input_rects, k, all_combos=False):
     use_kadane = all_combos or (nx * nx * ny <= KADANE_THRESH)
 
     if use_kadane:
-        # Signed value grid; covered cells set to 0 (no further gain or loss).
+        # Signed grid. Covered cells become 0.
         val = [[0] * ny for _ in range(nx)]
         for i in range(nx):
             dx = cell_dx[i]; ra = inA[i]; rv = val[i]
@@ -352,7 +297,7 @@ def build_up(input_rects, k, all_combos=False):
                 for j in range(j1, j2):
                     rv[j] = 0
     else:
-        avail = [row[:] for row in inA]  # in A and not yet covered
+        avail = [row[:] for row in inA]  # in A, not covered yet
         for _ in range(k):
             if time.monotonic() - _T0 > TIME_LIMIT:
                 break
@@ -375,18 +320,7 @@ def build_up(input_rects, k, all_combos=False):
 
 
 def optimize_edges(output_rects, ref_rects):
-    """Slide each output rect's four edges to their best positions.
-
-    An edge may move outward (grow, swallowing adjacent uncovered in-A cells at
-    the cost of any excess crossed) or inward (shrink, trimming excess). For one
-    edge the others are held fixed and the position minimising |A△B| is chosen;
-    only strictly improving moves are applied, so this can never lower the score.
-
-    Per-cell rules (signed = +area if in A else −area; coverage = #rects over it):
-      adding an uncovered cell (coverage 0) changes symdiff by −signed;
-      removing an exclusive cell (coverage 1) changes symdiff by +signed;
-      cells covered by another rect contribute 0 either way.
-    """
+    """Slide each output rect's four edges, keeping only improving moves."""
     if not output_rects or not ref_rects:
         return list(output_rects)
 
@@ -436,21 +370,22 @@ def optimize_edges(output_rects, ref_rects):
             for j in range(j1, j2):
                 row[j] += 1
 
-    def add_delta_x(i, j1, j2):      # add column-strip i over rows [j1,j2)
+    # Score change from adding or dropping one strip of cells.
+    def add_delta_x(i, j1, j2):
         cr = coverage[i]; sr = signed[i]; s = 0
         for j in range(j1, j2):
             if cr[j] == 0:
                 s -= sr[j]
         return s
 
-    def rem_delta_x(i, j1, j2):      # remove column-strip i over rows [j1,j2)
+    def rem_delta_x(i, j1, j2):
         cr = coverage[i]; sr = signed[i]; s = 0
         for j in range(j1, j2):
             if cr[j] == 1:
                 s += sr[j]
         return s
 
-    def add_delta_y(j, i1, i2):      # add row-strip j over cols [i1,i2)
+    def add_delta_y(j, i1, i2):
         s = 0
         for i in range(i1, i2):
             if coverage[i][j] == 0:
@@ -464,7 +399,7 @@ def optimize_edges(output_rects, ref_rects):
                 s += signed[i][j]
         return s
 
-    def toggle(i1, i2, j1, j2, delta):  # delta=+1 add, -1 remove
+    def toggle(i1, i2, j1, j2, delta):  # +1 add, -1 remove
         for i in range(i1, i2):
             row = coverage[i]
             for j in range(j1, j2):
@@ -481,14 +416,14 @@ def optimize_edges(output_rects, ref_rects):
                 continue
             i1, i2, j1, j2 = out_bounds[idx]
 
-            # LEFT edge: best new left position p (grow p<i1, shrink p>i1).
+            # Left edge. Most negative acc wins.
             best_d = 0; best_p = i1; acc = 0
-            for p in range(i1 - 1, -1, -1):       # grow left
+            for p in range(i1 - 1, -1, -1):       # grow
                 acc += add_delta_x(p, j1, j2)
                 if acc < best_d:
                     best_d = acc; best_p = p
             acc = 0
-            for p in range(i1 + 1, i2):           # shrink left
+            for p in range(i1 + 1, i2):           # shrink
                 acc += rem_delta_x(p - 1, j1, j2)
                 if acc < best_d:
                     best_d = acc; best_p = p
@@ -499,14 +434,14 @@ def optimize_edges(output_rects, ref_rects):
             if best_p != i1:
                 i1 = best_p; improved = True
 
-            # RIGHT edge: best new right position q (grow q>i2, shrink q<i2).
+            # Right edge.
             best_d = 0; best_q = i2; acc = 0
-            for q in range(i2 + 1, nx + 1):       # grow right
+            for q in range(i2 + 1, nx + 1):       # grow
                 acc += add_delta_x(q - 1, j1, j2)
                 if acc < best_d:
                     best_d = acc; best_q = q
             acc = 0
-            for q in range(i2 - 1, i1, -1):       # shrink right
+            for q in range(i2 - 1, i1, -1):       # shrink
                 acc += rem_delta_x(q, j1, j2)
                 if acc < best_d:
                     best_d = acc; best_q = q
@@ -517,9 +452,9 @@ def optimize_edges(output_rects, ref_rects):
             if best_q != i2:
                 i2 = best_q; improved = True
 
-            # TOP edge (j1).
+            # Bottom edge.
             best_d = 0; best_p = j1; acc = 0
-            for p in range(j1 - 1, -1, -1):       # grow down
+            for p in range(j1 - 1, -1, -1):       # grow
                 acc += add_delta_y(p, i1, i2)
                 if acc < best_d:
                     best_d = acc; best_p = p
@@ -535,9 +470,9 @@ def optimize_edges(output_rects, ref_rects):
             if best_p != j1:
                 j1 = best_p; improved = True
 
-            # BOTTOM edge (j2).
+            # Top edge.
             best_d = 0; best_q = j2; acc = 0
-            for q in range(j2 + 1, ny + 1):       # grow up
+            for q in range(j2 + 1, ny + 1):       # grow
                 acc += add_delta_y(q - 1, i1, i2)
                 if acc < best_d:
                     best_d = acc; best_q = q
@@ -560,11 +495,7 @@ def optimize_edges(output_rects, ref_rects):
 
 
 def drop_down_cluster(cluster_rects, k):
-    """
-    Greedy drop-down: start with all n input rects, repeatedly remove the rect
-    with the lowest removal cost (unique union area it covers exclusively) until
-    k remain. No pair merges — this keeps it fast for any n.
-    """
+    """Start with every input rect and drop the cheapest one until k remain."""
     n = len(cluster_rects)
     if k >= n:
         return list(cluster_rects)
@@ -735,8 +666,7 @@ def score_against_target(out_rects, ref_rects):
     yi = {v: i for i, v in enumerate(ys)}
     if (nx * ny > CELL_CAP or _grid_work(ref_rects, xi, yi) > WORK_CAP
             or _grid_work(out_rects, xi, yi) > WORK_CAP):
-        # Too large to rasterise safely; report +inf so callers never prefer
-        # this branch over an already-computed cheap result.
+        # Too big to rasterise, so report +inf and never pick this branch.
         return float('inf')
     A = [[False] * ny for _ in range(nx)]
     B = [[False] * ny for _ in range(nx)]
@@ -763,7 +693,7 @@ def score_against_target(out_rects, ref_rects):
 def main():
     _N, K, rects = read_input()
 
-    # K >= N: output every input rect (exact reproduction of A, perfect score).
+    # K >= N means we can just print every input rect and score 1.0.
     if K >= _N:
         out = list(rects)
         while len(out) < K:
@@ -771,7 +701,7 @@ def main():
         sys.stdout.write('\n'.join(f"{r[0]} {r[1]} {r[2]} {r[3]}" for r in out[:K]) + '\n')
         return
 
-    # Check if global approach (all coordinate combinations) is feasible
+    # Small enough to solve globally?
     xs_g = set(); ys_g = set()
     for r in rects:
         xs_g.add(r[0]); xs_g.add(r[2])
@@ -782,14 +712,14 @@ def main():
     global_feasible = n_xp_g * n_yp_g <= 700000
 
     if global_feasible:
-        # Global build-up: enumerate all coord combos across the entire input
+        # Global build-up over the whole input.
         bu_out, _ = build_up(rects, K, all_combos=True)
         bu_out = optimize_edges(bu_out, rects)
         while len(bu_out) < K:
             bu_out.append(bu_out[0] if bu_out else rects[0])
         out_rects = bu_out
 
-        # Also try drop-down (better when K/N is high and individual rects are good)
+        # Drop-down is better when K/N is high.
         if _N > K and time.monotonic() - _T0 < TIME_LIMIT - 0.3:
             dd_out = drop_down_cluster(rects, K)
             while len(dd_out) < K:
@@ -802,7 +732,7 @@ def main():
         sys.stdout.write('\n'.join(f"{r[0]} {r[1]} {r[2]} {r[3]}" for r in out_rects[:K]) + '\n')
         return
 
-    # Per-cluster approach for larger inputs
+    # Otherwise go cluster by cluster.
     clusters = find_clusters(rects)
     C = len(clusters)
     cluster_rects_list = [[rects[i] for i in c] for c in clusters]
@@ -823,11 +753,7 @@ def main():
             all_rects_seq.append(r_out)
             all_gains_seq.append(g_out)
 
-    # Allocate all K budget by marginal gain, FROM SCRATCH (every cluster starts
-    # at 0). Each added rect's gain == reduction in |A△B|, so popping the highest
-    # marginal gain greedily minimises symmetric difference. Allocating from 0
-    # (rather than forcing 1 per cluster) lets a big cluster's 2nd/3rd rect beat a
-    # tiny cluster's 1st rect — critical when K≈C and big clusters are starved.
+    # Split the K budget by marginal gain, every cluster starting from 0.
     budgets = [0] * C
     heap = []
     for i in range(C):
@@ -845,9 +771,7 @@ def main():
             heapq.heappush(heap, (-gs[nxt], i, nxt))
 
     out = []
-    # Process biggest-budget clusters first: they hold most of the uncovered
-    # area and benefit most from the time-bounded refinement pass. The remaining
-    # time budget is shared fairly across clusters in proportion to their budget.
+    # Biggest clusters first, and each gets time proportional to its budget.
     order = sorted(range(C), key=lambda i: budgets[i], reverse=True)
     remaining_b = sum(budgets[i] for i in order)
     for i in order:
@@ -855,12 +779,12 @@ def main():
         b = budgets[i]
         if b <= 0:
             continue
-        # Build-up result
+        # Build-up answer.
         bu_out = list(all_rects_seq[i][:b])
         while len(bu_out) < b:
             bu_out.append(cr[0])
 
-        # Drop-down result (fast — no pair merges)
+        # Drop-down answer, keep whichever scores better.
         cluster_out = bu_out
         if time.monotonic() - _T0 < TIME_LIMIT - 0.3:
             dd_out = drop_down_cluster(cr, b)
@@ -869,10 +793,7 @@ def main():
             if score_against_target(dd_out, cr) < score_against_target(bu_out, cr):
                 cluster_out = dd_out
 
-        # Time-bounded coordinate descent: alternate edge sliding (grow gaps /
-        # trim excess) with relocation of redundant rects. Each step is monotone
-        # in score, so iterating until a fixed point or the time slice runs out
-        # only helps.
+        # Alternate edge sliding and relocation until time runs out.
         time_left = (_T0 + TIME_LIMIT - 0.15) - time.monotonic()
         if b >= 2 and time_left > 0.02 and remaining_b > 0:
             slice_dl = time.monotonic() + time_left * (b / remaining_b)
