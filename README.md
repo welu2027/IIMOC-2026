@@ -4,12 +4,14 @@ My solutions to two optimization problems from IIMOC 2026. Both are heuristic
 problems, so there is no "correct" answer, you just get scored on how good your
 output is and you keep tweaking until the number stops going up.
 
-Final standings:
+Final judge results:
 
-| Problem | Score | Rank |
+| Problem | Score | Raw score |
 | --- | --- | --- |
-| Rectangle Approximation | 99.19% | 14 / 280 |
-| Chromatic Block Harmony | 99.92% | 14 / 275 |
+| Rectangle Approximation | 99.23% | 388.67358900000016 |
+| Chromatic Block Harmony | 99.88% | 800425419096089 |
+
+Total 199.10702590133934.
 
 ## Files
 
@@ -229,9 +231,9 @@ Local benchmark over the judge generator, seed 42, cases 1 to 30:
 | from-scratch budget allocation | 0.9458 |
 | edge sliding both directions | 0.9693 |
 
-That last number is a 3.94% improvement over the baseline, which does not sound
-like much until you look at the leaderboard and realize that's most of the gap
-between rank 60 and rank 14.
+That last number is a 3.94% improvement over the baseline. That sounds small, but
+at the top of the leaderboard everyone is scoring above 95%, so almost all of the
+separation between submissions lives in the last few percent.
 
 ### Things that didn't work
 
