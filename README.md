@@ -65,8 +65,6 @@ the total.
 
 ### Where the score comes from
 
-![score and runtime per judge case](viz/rect_summary.png)
-
 Every judge case scored and timed. Average is 0.9693 and the slowest case is
 1.31s against a 5 second limit, so there's real headroom left. The spread is not
 random: the low cases are the ones where K is small relative to how spread out
