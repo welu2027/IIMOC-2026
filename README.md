@@ -30,7 +30,7 @@ blockharmony/              same layout, 3s and 512MB
 
 viz/                       rendered output of my solutions, see below
   rect_summary.png           score and runtime across all 30 judge cases
-  ablation/                  what edge sliding actually changes
+  ablation/                  what edge sliding changes
   rect/                      12 judge cases rendered by vis.py
   demo/                      small hand-made cases at three budgets
   block/                     Block Harmony cases, small n so they're readable
@@ -72,7 +72,7 @@ Every judge case scored and timed. Average is 0.9693 and the slowest case is
 random: the low cases are the ones where K is small relative to how spread out
 the input is, so there are not enough output rectangles to go around.
 
-### What edge sliding actually does
+### What edge sliding does
 
 ![before and after edge sliding](viz/ablation/edge_sliding_zoom.png)
 
@@ -98,7 +98,7 @@ disabled:
 ![judge case 7](viz/rect/case7.png)
 
 Case 7, N=464 and K=170, scoring 0.9923. This is what the generator's output
-actually looks like: a lot of isolated small rectangles, which are basically free
+looks like: a lot of isolated small rectangles, which are basically free
 because each one gets its own output rectangle, plus one dense clump in the
 bottom middle where all the difficulty is. You can see the blue concentrated
 entirely in that clump. The clustering step is what lets the budget allocator
@@ -146,7 +146,7 @@ find pass splits the input into connected components and each one gets solved
 separately. This is the whole reason the thing is fast: the judge cases from
 gen.py have lots of small clumps rather than one giant blob.
 
-**Coordinate compression.** Only the x and y values that actually appear in the
+**Coordinate compression.** Only the x and y values that appear in the
 input ever matter, so every grid in the file is a compressed grid where one cell
 stands for a whole rectangle of real area. Cell areas get carried around as
 `cell_dx` and `cell_dy` instead of being assumed to be 1.

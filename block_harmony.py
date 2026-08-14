@@ -223,7 +223,7 @@ def solve():
             if not swapped:
                 break
 
-    # Output. Renumber the sums we actually used into colors 1..C.
+    # Output. Renumber the sums we used into colors 1..C.
     if best_obj <= 0 or not best_sol:
         print(0)
         return
