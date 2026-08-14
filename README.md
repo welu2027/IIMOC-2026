@@ -25,6 +25,13 @@ squareapproximation/       problem package for Rectangle Approximation
   smalltest/                 sample cases, .in / .ans / .output / .png
 
 blockharmony/              same layout, 3s and 512MB
+
+viz/                       rendered output of my solutions, see below
+  rect_summary.png           score and runtime across all 30 judge cases
+  ablation/                  what edge sliding actually changes
+  rect/                      12 judge cases rendered by vis.py
+  demo/                      small hand-made cases at three budgets
+  block/                     Block Harmony cases, small n so they're readable
 ```
 
 Both solutions read stdin and write stdout, no arguments:
@@ -36,6 +43,91 @@ python3 block_harmony.py < blockharmony/smalltest/1.in
 
 To reproduce a judge case, `python3 gen.py 42 <case_id>` inside the problem
 folder. Case ids run 1 to 30.
+
+## Pictures
+
+Everything in `viz/` was produced by running my solutions on generated cases and
+feeding the input and output to the official `vis.py`. It needs matplotlib and
+numpy, which are not in the system python here, so:
+
+```
+python3 -m venv venv && ./venv/bin/pip install matplotlib numpy
+python3 squareapproximation/gen.py 42 7 > case7.in
+python3 square_approximation.py < case7.in > case7.out
+./venv/bin/python squareapproximation/vis.py case7.in case7.out --out case7.png
+```
+
+Green is area both A and B cover, blue is area in A that I missed, orange is area
+I covered that isn't in A. The score is one minus the blue plus orange divided by
+the total.
+
+### Where the score comes from
+
+![score and runtime per judge case](viz/rect_summary.png)
+
+Every judge case scored and timed. Average is 0.9693 and the slowest case is
+1.31s against a 5 second limit, so there's real headroom left. The spread is not
+random: the low cases are the ones where K is small relative to how spread out
+the input is, so there are not enough output rectangles to go around.
+
+### What edge sliding actually does
+
+![before and after edge sliding](viz/ablation/edge_sliding_zoom.png)
+
+This is the same cluster with the edge sliding and relocation passes turned off
+and then on. On the left the greedy build-up leaves blue seams between its
+rectangles, because it only ever places rectangles that fit entirely inside A and
+those never quite meet. On the right the edges have grown across the seams. It
+picks up a few orange slivers of excess doing it, but the blue it removes is
+worth much more, and only moves that improve the score get kept.
+
+Measured on four judge cases, running the same solution with those two passes
+disabled:
+
+| Case | greedy only | full | gain |
+| --- | --- | --- | --- |
+| 5 | 0.9348 | 0.9525 | +0.0177 |
+| 21 | 0.9092 | 0.9359 | +0.0267 |
+| 24 | 0.9768 | 0.9841 | +0.0073 |
+| 27 | 0.9848 | 0.9901 | +0.0053 |
+
+### A full judge case
+
+![judge case 7](viz/rect/case7.png)
+
+Case 7, N=464 and K=170, scoring 0.9923. This is what the generator's output
+actually looks like: a lot of isolated small rectangles, which are basically free
+because each one gets its own output rectangle, plus one dense clump in the
+bottom middle where all the difficulty is. You can see the blue concentrated
+entirely in that clump. The clustering step is what lets the budget allocator
+notice that and spend most of K there.
+
+More cases are in `viz/rect/`.
+
+### How the budget changes the answer
+
+| K = 6 | K = 12 | K = 24 |
+| --- | --- | --- |
+| ![](viz/demo/budget_k1.png) | ![](viz/demo/budget_k2.png) | ![](viz/demo/budget_k3.png) |
+
+Same 40 rectangle input, three different budgets. These are hand-made rather than
+judge cases, because the real small cases all have K close to N and come out
+perfect, which makes for a boring picture. At K=6 there is nowhere near enough
+budget so the solution covers the blob with a few big rectangles and eats a lot
+of orange excess. By K=24 it can trace the actual boundary.
+
+### Block Harmony
+
+![block harmony case 28](viz/block/case28.png)
+
+The top panel is the array with each selected block colored by its assigned
+color, and the bottom strip shows the blocks as intervals so you can see they
+never overlap. Every block of a given color has the same sum, which is the
+constraint that makes the problem interesting. Grey bars are elements not used by
+any block.
+
+The large judge cases render as a 57000 pixel wide strip and are unreadable, so
+`viz/block/` only has the small-n cases plus the statement samples.
 
 ## Rectangle Approximation
 
